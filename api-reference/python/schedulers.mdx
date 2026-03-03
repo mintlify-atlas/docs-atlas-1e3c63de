@@ -1,0 +1,453 @@
+---
+title: "Schedulers"
+description: "Urgency-based and fixed-interval schedulers for market data tracking"
+---
+
+## Overview
+
+The platform includes two specialized schedulers for different data collection patterns:
+
+- **snoozerScheduler**: Urgency-based scheduling for live, high-frequency data (priceoverview, histogram, activity)
+- **ClockworkScheduler**: Fixed-interval scheduling for historical price data (pricehistory)
+
+Both schedulers share a rate limiter and coordinate through the Orchestrator.
+
+---
+
+## snoozerScheduler
+
+Urgency-based scheduler for real-time market data with dynamic prioritization.
+
+### Class Definition
+
+```python
+from src.snoozerScheduler import snoozerScheduler
+
+scheduler = snoozerScheduler(
+    live_items=items,
+    rate_limiter=shared_limiter,
+    config_path="config.yaml"
+)
+```
+
+### Constructor
+
+<ParamField path="live_items" type="List[dict] | None" default="None">
+  Optional list of items to track. If None, loads from config.
+</ParamField>
+
+<ParamField path="rate_limiter" type="RateLimiter | None" default="None">
+  Optional shared RateLimiter instance. If None, client creates its own.
+</ParamField>
+
+<ParamField path="config_path" type="str" default="config.yaml">
+  Path to YAML configuration file (used if live_items is None)
+</ParamField>
+
+### Attributes
+
+<ResponseField name="live_items" type="List[dict]">
+  List of item configurations to track
+</ResponseField>
+
+<ResponseField name="rate_limiter" type="RateLimiter">
+  Rate limiter instance for API call throttling
+</ResponseField>
+
+<ResponseField name="steam_client" type="SteamAPIClient | None">
+  Steam API client (initialized in run())
+</ResponseField>
+
+<ResponseField name="data_wizard" type="SQLinserts | None">
+  Database writer (initialized in run())
+</ResponseField>
+
+### Methods
+
+#### load_live_items()
+
+Load all items from config that are NOT pricehistory.
+
+```python
+def load_live_items(self) -> List[dict]:
+```
+
+**Returns:**
+
+<ResponseField name="list" type="List[dict]">
+  List of live item configurations (priceoverview, histogram, activity)
+</ResponseField>
+
+---
+
+#### calculate_urgency()
+
+Calculate urgency score for an item.
+
+```python
+def calculate_urgency(self, item: dict) -> float:
+```
+
+<ParamField path="item" type="dict">
+  Item configuration with last_update and polling-interval-in-seconds
+</ParamField>
+
+**Returns:**
+
+<ResponseField name="float" type="float">
+  Urgency score:
+  - `>= 1.0`: Overdue, needs immediate execution
+  - `< 1.0`: Not yet due
+  - `0.0`: In cooldown period
+  - `inf`: Never updated (highest priority)
+</ResponseField>
+
+**Formula:**
+
+```
+urgency = (time since last update) / (target polling interval)
+```
+
+**Example:**
+
+```python
+item = {
+    'market_hash_name': 'AK-47 | Redline (Field-Tested)',
+    'polling-interval-in-seconds': 30,
+    'last_update': datetime.now() - timedelta(seconds=45)
+}
+
+urgency = scheduler.calculate_urgency(item)
+# urgency = 45 / 30 = 1.5 (overdue by 50%)
+```
+
+---
+
+#### calculate_min_sleep_duration()
+
+Calculate minimum sleep time until ANY item becomes actionable.
+
+```python
+def calculate_min_sleep_duration(self) -> float:
+```
+
+**Returns:**
+
+<ResponseField name="float" type="float">
+  Sleep duration in seconds until soonest item needs execution
+</ResponseField>
+
+Checks all items and returns the shortest time until any item:
+- Reaches urgency 1.0 (overdue), OR
+- Exits 429 cooldown (skip_until reached)
+
+---
+
+#### apply_exponential_backoff()
+
+Apply exponential backoff for rate limit (429), server (5xx), or network errors.
+
+```python
+def apply_exponential_backoff(self, item: dict, error_code: int) -> None:
+```
+
+<ParamField path="item" type="dict">
+  Item configuration that received the error
+</ParamField>
+
+<ParamField path="error_code" type="int">
+  HTTP status code (429, 5xx) or 0 for network errors
+</ParamField>
+
+**Backoff Strategy:**
+
+- 1st error: skip 1 polling interval
+- 2nd consecutive: skip 2 intervals
+- 3rd consecutive: skip 4 intervals
+- Capped at 8x the polling interval
+
+**Formula:**
+
+```
+skip_multiplier = min(2^(consecutive_backoffs - 1), 8)
+skip_seconds = polling_interval * skip_multiplier
+```
+
+---
+
+#### execute_item()
+
+Execute the API call for a specific item.
+
+```python
+async def execute_item(self, item: dict) -> None:
+```
+
+<ParamField path="item" type="dict">
+  Item configuration to execute
+</ParamField>
+
+Behavior:
+1. Check if item is in cooldown (skip if so)
+2. Execute appropriate API call based on `apiid`
+3. Store result to database
+4. Update `last_update` timestamp
+5. Reset backoff tracking on success
+6. Apply exponential backoff on errors
+
+---
+
+#### run()
+
+Main scheduler loop using urgency-based algorithm.
+
+```python
+async def run(self) -> None:
+```
+
+**Algorithm:**
+
+1. Calculate urgency for all items
+2. Execute ALL items with urgency >= 1.0
+3. If nothing was urgent, sleep until next item becomes urgent
+4. Repeat forever
+
+**Example:**
+
+```python
+import asyncio
+from src.snoozerScheduler import snoozerScheduler
+
+items = [
+    {
+        'market_hash_name': 'AK-47 | Redline (Field-Tested)',
+        'apiid': 'priceoverview',
+        'appid': 730,
+        'polling-interval-in-seconds': 30
+    },
+    {
+        'market_hash_name': 'AWP | Asiimov (Field-Tested)',
+        'apiid': 'itemordershistogram',
+        'appid': 730,
+        'item_nameid': 176059193,
+        'polling-interval-in-seconds': 60
+    }
+]
+
+scheduler = snoozerScheduler(live_items=items)
+await scheduler.run()
+```
+
+---
+
+## ClockworkScheduler
+
+Fixed-interval scheduler for historical price data collection.
+
+### Class Definition
+
+```python
+from src.clockworkScheduler import ClockworkScheduler
+
+scheduler = ClockworkScheduler(
+    items=history_items,
+    rate_limiter=shared_limiter,
+    config_path="config.yaml"
+)
+```
+
+### Constructor
+
+<ParamField path="items" type="List[dict] | None" default="None">
+  Optional list of pricehistory items to track. If None, loads from config.
+</ParamField>
+
+<ParamField path="rate_limiter" type="RateLimiter | None" default="None">
+  Optional shared RateLimiter instance. If None, client creates its own.
+</ParamField>
+
+<ParamField path="config_path" type="str" default="config.yaml">
+  Path to YAML configuration file (used if items is None)
+</ParamField>
+
+### Attributes
+
+<ResponseField name="history_items" type="List[dict]">
+  List of pricehistory item configurations
+</ResponseField>
+
+<ResponseField name="rate_limiter" type="RateLimiter">
+  Rate limiter instance for API call throttling
+</ResponseField>
+
+<ResponseField name="steam_client" type="SteamAPIClient | None">
+  Steam API client (initialized in run())
+</ResponseField>
+
+<ResponseField name="data_wizard" type="SQLinserts | None">
+  Database writer (initialized in run())
+</ResponseField>
+
+### Methods
+
+#### get_next_execution_time()
+
+Calculate the next execution time (:30 past the next hour).
+
+```python
+def get_next_execution_time(self) -> datetime:
+```
+
+**Returns:**
+
+<ResponseField name="datetime" type="datetime">
+  Next execution time (next hour at :30 UTC)
+</ResponseField>
+
+**Example:**
+
+```python
+# Current time: 14:25 UTC
+next_run = scheduler.get_next_execution_time()
+# Returns: 14:30 UTC
+
+# Current time: 14:35 UTC
+next_run = scheduler.get_next_execution_time()
+# Returns: 15:30 UTC
+```
+
+---
+
+#### calculate_sleep_duration()
+
+Calculate seconds to sleep until next execution.
+
+```python
+def calculate_sleep_duration(self, next_execution: datetime) -> float:
+```
+
+<ParamField path="next_execution" type="datetime">
+  Target execution datetime
+</ParamField>
+
+**Returns:**
+
+<ResponseField name="float" type="float">
+  Sleep duration in seconds
+</ResponseField>
+
+---
+
+#### execute_history_items()
+
+Execute pricehistory API calls for all configured items.
+
+```python
+async def execute_history_items(self) -> None:
+```
+
+Runs all history items in sequence, respecting the rate limiter. Retries transient errors (429, 5xx, network) with exponential backoff.
+
+---
+
+#### run_initial_fetch()
+
+Run pricehistory once immediately when scheduler starts.
+
+```python
+async def run_initial_fetch(self) -> None:
+```
+
+This ensures data is available immediately, then switches to hourly schedule.
+
+---
+
+#### run()
+
+Main clockwork loop.
+
+```python
+async def run(self) -> None:
+```
+
+**Algorithm:**
+
+1. Run pricehistory immediately on startup
+2. Calculate next :30 past the hour
+3. Sleep until that time
+4. Execute all pricehistory items
+5. Repeat from step 2
+
+**Schedule:**
+
+Executes at 30 minutes past every UTC hour:
+- 00:30, 01:30, 02:30, ..., 23:30
+
+This timing accounts for Steam's ~20-30 minute lag in updating historical data.
+
+**Example:**
+
+```python
+import asyncio
+from src.clockworkScheduler import ClockworkScheduler
+
+history_items = [
+    {
+        'market_hash_name': 'AK-47 | Redline (Field-Tested)',
+        'apiid': 'pricehistory',
+        'appid': 730,
+        'polling-interval-in-seconds': 3600  # Ignored by ClockworkScheduler
+    }
+]
+
+scheduler = ClockworkScheduler(items=history_items)
+await scheduler.run()
+```
+
+---
+
+## Comparison
+
+| Feature | snoozerScheduler | ClockworkScheduler |
+|---------|------------------|--------------------|
+| **Use Case** | Live data (priceoverview, histogram, activity) | Historical data (pricehistory) |
+| **Algorithm** | Urgency-based (dynamic priority) | Fixed-time (hourly at :30) |
+| **Scheduling** | Calculated per-item based on polling interval | Fixed: :30 past every UTC hour |
+| **Priority** | Most overdue item first | All items equal |
+| **Backoff** | Per-item exponential backoff | Global retry with backoff |
+| **Initial Run** | Immediate (all items fire at startup) | Immediate (then hourly) |
+| **Sleep Logic** | Until next item overdue | Until next :30 past hour |
+
+## Error Handling
+
+Both schedulers handle errors gracefully:
+
+### Transient Errors (429, 5xx, network)
+- **snoozerScheduler**: Exponential backoff per item (cooldown period)
+- **ClockworkScheduler**: Retry with fixed backoff (30s, 60s, 120s, 240s)
+
+### Authentication Errors (400, 401, 403)
+- **snoozerScheduler**: Log error, continue with other items
+- **ClockworkScheduler**: Retry with backoff (supports hot-swapping cookies)
+
+### Client Errors (other 4xx)
+- Log error, no retry (configuration issue)
+
+### Validation Errors
+- Log error, no retry (data structure mismatch)
+
+## Best Practices
+
+1. **Share Rate Limiter**: Always pass the same rate limiter instance to both schedulers via Orchestrator
+
+2. **Configure Polling Intervals**: Set intervals based on data freshness needs:
+   - Price overview: 30-60s
+   - Order histogram: 60-120s
+   - Order activity: 30-60s
+   - Price history: Ignored (fixed hourly)
+
+3. **Monitor Urgency**: Items with urgency consistently > 2.0 indicate underprovisioned rate limits
+
+4. **Handle Backoff**: Don't manually override `skip_until` - let the scheduler manage cooldowns
+
+5. **Use Orchestrator**: Don't instantiate schedulers directly in production - use Orchestrator for proper coordination

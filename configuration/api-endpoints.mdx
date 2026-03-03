@@ -1,0 +1,583 @@
+---
+title: 'Steam API Endpoints'
+description: 'Four Steam Market API endpoints and when to use them'
+icon: 'plug'
+---
+
+## Overview
+
+Hridaya supports four distinct Steam Community Market API endpoints. Each serves a different purpose and returns different data structures.
+
+## Quick Reference
+
+| Endpoint | Auth Required | Update Frequency | Use Case |
+|----------|---------------|------------------|----------|
+| `priceoverview` | No | Seconds | Current prices and 24h volume |
+| `itemordershistogram` | No | Seconds | Full order book depth |
+| `itemordersactivity` | No | Seconds | Real-time trade feed |
+| `pricehistory` | **Yes** | Hourly | Historical trend analysis |
+
+<Tip>
+  You can use multiple endpoints for the same item to get comprehensive market data. Simply add multiple entries with different `apiid` values.
+</Tip>
+
+---
+
+## priceoverview
+
+Provides current market snapshot: lowest listing price, median sale price, and 24-hour trading volume.
+
+### When to Use
+
+- Monitor current market prices
+- Track price movements over time
+- Compare items by volume/liquidity
+- Build price alert systems
+- Simple portfolio valuation
+
+### Configuration
+
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 30
+    apiid: 'priceoverview'
+```
+
+<ParamField path="item_nameid" type="integer">
+  **Not required** for this endpoint
+</ParamField>
+
+### Response Data
+
+Returned fields (from `dataClasses.py:PriceOverviewData`):
+
+<ResponseField name="success" type="boolean">
+  Whether the API call succeeded
+</ResponseField>
+
+<ResponseField name="lowest_price" type="string">
+  Current lowest listing price (formatted with currency symbol)
+  
+  **Example**: `"$12.34"`, `"€10.50"`
+</ResponseField>
+
+<ResponseField name="median_price" type="string">
+  Recent median sale price (formatted with currency symbol)
+  
+  **Example**: `"$12.00"`
+</ResponseField>
+
+<ResponseField name="volume" type="string">
+  Number of sales in the last 24 hours (formatted with commas)
+  
+  **Example**: `"1,234"`, `"56"`
+</ResponseField>
+
+### Database Schema
+
+Stored in table `price_overview`:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Auto-incrementing row ID |
+| `timestamp` | DATETIME | When this snapshot was taken (UTC) |
+| `appid` | INTEGER | Steam app ID |
+| `market_hash_name` | TEXT | Item name |
+| `item_nameid` | INTEGER | Steam's internal item ID (if available) |
+| `currency` | TEXT | Currency code |
+| `country` | TEXT | Country code |
+| `language` | TEXT | Language |
+| `lowest_price` | REAL | Cheapest current listing (numeric) |
+| `median_price` | REAL | Median sale price (numeric) |
+| `volume` | INTEGER | Sales in last 24h |
+
+### Example Query
+
+Get the latest price for an item:
+
+```sql
+SELECT timestamp, lowest_price, median_price, volume
+FROM price_overview
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+ORDER BY timestamp DESC
+LIMIT 1;
+```
+
+### API Endpoint Details
+
+**URL**: `https://steamcommunity.com/market/priceoverview/`
+
+**Method**: GET
+
+**Query Parameters** (from `steamAPIclient.py:fetch_price_overview`):
+- `appid` - Application ID
+- `market_hash_name` - Item name (URL-encoded)
+- `currency` - Currency code
+- `country` - Country code  
+- `language` - Language
+
+---
+
+## itemordershistogram
+
+Provides complete order book with all buy orders (bids) and sell orders (asks) at each price level. Think "market depth chart".
+
+### When to Use
+
+- Analyze market liquidity
+- Calculate bid-ask spread
+- Find support/resistance levels
+- Detect market manipulation (spoofed orders)
+- Build order book visualizations
+- Algorithmic trading strategies
+
+### Configuration
+
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Dreams & Nightmares Case"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 15
+    apiid: 'itemordershistogram'
+    item_nameid: 175985258  # REQUIRED
+```
+
+<ParamField path="item_nameid" type="integer" required>
+  **Required** for this endpoint. See [Config Reference](/configuration/config-reference#endpoint-specific-required-parameters) for how to find it.
+</ParamField>
+
+### Response Data
+
+Returned fields (from `dataClasses.py:OrdersHistogramData`):
+
+<ResponseField name="success" type="boolean | integer">
+  Whether the API call succeeded (Steam returns `1` for true)
+</ResponseField>
+
+<ResponseField name="highest_buy_order" type="string">
+  Best bid price (highest price buyers are willing to pay)
+</ResponseField>
+
+<ResponseField name="lowest_sell_order" type="string">
+  Best ask price (lowest price sellers are willing to accept)
+</ResponseField>
+
+<ResponseField name="buy_order_count" type="integer">
+  Total number of buy orders across all price levels
+</ResponseField>
+
+<ResponseField name="sell_order_count" type="integer">
+  Total number of sell orders across all price levels
+</ResponseField>
+
+<ResponseField name="buy_order_table" type="array">
+  Array of buy order entries. Each entry has:
+  - `price` (string) - Price level
+  - `quantity` (string) - Number of orders at this price
+  
+  **Example**: `[{"price": "12.50", "quantity": "15"}, {"price": "12.45", "quantity": "8"}]`
+</ResponseField>
+
+<ResponseField name="sell_order_table" type="array">
+  Array of sell order entries (same structure as buy_order_table)
+</ResponseField>
+
+<ResponseField name="buy_order_graph" type="array">
+  Graph visualization data for buy orders (cumulative depth)
+</ResponseField>
+
+<ResponseField name="sell_order_graph" type="array">
+  Graph visualization data for sell orders (cumulative depth)
+</ResponseField>
+
+### Database Schema
+
+Stored in table `orders_histogram`:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Auto-incrementing row ID |
+| `timestamp` | DATETIME | When this snapshot was taken (UTC) |
+| `appid` | INTEGER | Steam app ID |
+| `market_hash_name` | TEXT | Item name |
+| `item_nameid` | INTEGER | Steam's internal item ID |
+| `currency` | TEXT | Currency code |
+| `country` | TEXT | Country code |
+| `language` | TEXT | Language |
+| `buy_order_table` | TEXT | JSON array of buy orders |
+| `sell_order_table` | TEXT | JSON array of sell orders |
+| `buy_order_graph` | TEXT | JSON graph data |
+| `sell_order_graph` | TEXT | JSON graph data |
+| `buy_order_count` | INTEGER | Total buy orders |
+| `sell_order_count` | INTEGER | Total sell orders |
+| `highest_buy_order` | REAL | Best bid |
+| `lowest_sell_order` | REAL | Best ask |
+
+### Example Query
+
+Calculate current bid-ask spread:
+
+```sql
+SELECT 
+  timestamp,
+  highest_buy_order,
+  lowest_sell_order,
+  (lowest_sell_order - highest_buy_order) AS spread,
+  ((lowest_sell_order - highest_buy_order) / highest_buy_order * 100) AS spread_pct
+FROM orders_histogram
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+ORDER BY timestamp DESC
+LIMIT 1;
+```
+
+Extract top buy orders using JSON:
+
+```sql
+SELECT 
+  json_extract(buy_order_table, '$[0].price') AS top_bid_price,
+  json_extract(buy_order_table, '$[0].quantity') AS top_bid_quantity
+FROM orders_histogram
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+ORDER BY timestamp DESC
+LIMIT 1;
+```
+
+### API Endpoint Details
+
+**URL**: `https://steamcommunity.com/market/itemordershistogram`
+
+**Method**: GET
+
+**Query Parameters** (from `steamAPIclient.py:fetch_orders_histogram`):
+- `norender` - Set to `1` (returns JSON instead of HTML)
+- `appid` - Application ID
+- `item_nameid` - Numeric item ID
+- `currency` - Currency code
+- `country` - Country code
+- `language` - Language
+
+---
+
+## itemordersactivity
+
+Provides real-time feed of recent market activity: purchases and new listings as they happen.
+
+### When to Use
+
+- Monitor trading velocity
+- Detect price trends from actual trades
+- Track market sentiment (buying vs selling pressure)
+- Build activity notifications
+- Analyze trading patterns
+
+### Configuration
+
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Revolution Case"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 8
+    apiid: 'itemordersactivity'
+    item_nameid: 175995756  # REQUIRED
+```
+
+<ParamField path="item_nameid" type="integer" required>
+  **Required** for this endpoint. See [Config Reference](/configuration/config-reference#endpoint-specific-required-parameters) for how to find it.
+</ParamField>
+
+<Warning>
+  This is the most rate-limit-sensitive endpoint. Steam returns HTML strings that require parsing. Recommended minimum polling interval: 8 seconds.
+</Warning>
+
+### Response Data
+
+Returned fields (from `dataClasses.py:OrdersActivityData`):
+
+<ResponseField name="success" type="boolean | integer">
+  Whether the API call succeeded (Steam returns `1` for true)
+</ResponseField>
+
+<ResponseField name="timestamp" type="integer">
+  Unix timestamp when Steam generated this response
+</ResponseField>
+
+<ResponseField name="activity" type="array">
+  Array of HTML strings describing recent activity
+  
+  **Example**: `["+$0.85\n" + " at 16:23:45"]`
+</ResponseField>
+
+<ResponseField name="parsed_activities" type="array">
+  Array of structured activity entries (parsed from HTML). Each entry has:
+  - `price` (string) - Trade price
+  - `currency` (string) - ISO currency code ("USD", "EUR", etc.)
+  - `action` (string) - Activity type ("Purchased", "Listed")
+  - `timestamp` (datetime) - When the activity occurred
+  - `raw_html` (string) - Original HTML string
+  
+  **Note**: This field is populated by `parseActivityHTML_utility.py` after fetching.
+</ResponseField>
+
+### Database Schema
+
+Stored in table `orders_activity`:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Auto-incrementing row ID |
+| `timestamp` | DATETIME | When this snapshot was taken (UTC) |
+| `appid` | INTEGER | Steam app ID |
+| `market_hash_name` | TEXT | Item name |
+| `item_nameid` | INTEGER | Steam's internal item ID |
+| `currency` | TEXT | Currency code |
+| `country` | TEXT | Country code |
+| `language` | TEXT | Language |
+| `activity_raw` | TEXT | JSON array of raw HTML strings |
+| `parsed_activities` | TEXT | JSON array of parsed activities |
+| `activity_count` | INTEGER | Number of activities in snapshot |
+| `steam_timestamp` | INTEGER | Unix timestamp from Steam |
+
+### Example Query
+
+Get recent trades:
+
+```sql
+SELECT timestamp, parsed_activities, activity_count
+FROM orders_activity
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+ORDER BY timestamp DESC
+LIMIT 10;
+```
+
+### API Endpoint Details
+
+**URL**: `https://steamcommunity.com/market/itemordersactivity`
+
+**Method**: GET
+
+**Query Parameters** (from `steamAPIclient.py:fetch_orders_activity`):
+- `country` - Country code
+- `language` - Language
+- `currency` - Currency code
+- `item_nameid` - Numeric item ID
+- `two_factor` - Two factor flag (default `0`)
+
+**Response Format**: JSON with `text/html` Content-Type (requires manual parsing)
+
+---
+
+## pricehistory
+
+Provides complete historical price data: hourly aggregated prices and volumes going back years. Like stock OHLC data.
+
+### When to Use
+
+- Long-term trend analysis
+- Volatility calculations
+- Seasonal pattern detection
+- Backtesting trading strategies
+- Portfolio historical valuation
+- Market research and reporting
+
+### Configuration
+
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "AWP | Neo-Noir (Factory New)"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 3600  # Hourly recommended
+    apiid: 'pricehistory'
+```
+
+<ParamField path="item_nameid" type="integer">
+  **Not required** for this endpoint
+</ParamField>
+
+<Warning>
+  This endpoint **requires authentication**. You must provide Steam session cookies in your `.env` file. See [Authentication](/configuration/authentication) for setup instructions.
+</Warning>
+
+<Tip>
+  Historical data doesn't change frequently. Use longer polling intervals (3600s / 1 hour) to conserve rate limits. The system fetches **all available history** on first request.
+</Tip>
+
+### Response Data
+
+Returned fields (from `dataClasses.py:PriceHistoryData`):
+
+<ResponseField name="success" type="boolean">
+  Whether the API call succeeded
+</ResponseField>
+
+<ResponseField name="price_prefix" type="string">
+  Currency prefix symbol (e.g., `"$"`)
+</ResponseField>
+
+<ResponseField name="price_suffix" type="string">
+  Currency suffix symbol (e.g., `"€"`)
+</ResponseField>
+
+<ResponseField name="prices" type="array">
+  Array of price history data points. Each entry is a 3-element array:
+  - `[0]` (string) - Date/time string (e.g., `"Jul 02 2014 01: +0"`)
+  - `[1]` (float) - Median price during this hour
+  - `[2]` (string) - Trading volume during this hour
+  
+  **Example**: `[["Mar 03 2026 14: +0", 12.34, "156"], ["Mar 03 2026 15: +0", 12.50, "142"]]`
+</ResponseField>
+
+### Database Schema
+
+Stored in table `price_history`:
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Auto-incrementing row ID |
+| `time` | DATETIME | The hour this data point represents (UTC) |
+| `appid` | INTEGER | Steam app ID |
+| `market_hash_name` | TEXT | Item name |
+| `item_nameid` | INTEGER | Steam's internal item ID (if available) |
+| `currency` | TEXT | Currency code |
+| `country` | TEXT | Country code |
+| `language` | TEXT | Language |
+| `price` | REAL | Median price during this hour |
+| `volume` | INTEGER | Number of sales during this hour |
+| `fetched_at` | DATETIME | When we fetched this data |
+
+### Example Queries
+
+Daily average price over last 30 days:
+
+```sql
+SELECT 
+  date(time) AS day,
+  AVG(price) AS avg_price,
+  SUM(volume) AS total_volume
+FROM price_history
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND time > datetime('now', '-30 days')
+GROUP BY date(time)
+ORDER BY day DESC;
+```
+
+Find price spikes (20% above average):
+
+```sql
+WITH avg_price AS (
+  SELECT AVG(price) AS mean 
+  FROM price_history
+  WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+)
+SELECT time, price, volume
+FROM price_history, avg_price
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND price > mean * 1.2
+ORDER BY time DESC;
+```
+
+### API Endpoint Details
+
+**URL**: `https://steamcommunity.com/market/pricehistory`
+
+**Method**: GET
+
+**Authentication**: **Required** - Steam session cookies
+
+**Query Parameters** (from `steamAPIclient.py:fetch_price_history`):
+- `appid` - Application ID
+- `market_hash_name` - Item name (URL-encoded)
+- `currency` - Currency code
+- `country` - Country code
+- `language` - Language
+
+**Required Cookies**:
+- `sessionid` - Your Steam session ID
+- `steamLoginSecure` - Your Steam login token
+- `browserid` (optional) - Browser identifier
+- `steamCountry` (optional) - Steam country code
+
+**Required Headers**:
+- `User-Agent` - Browser user agent string
+- `Referer` - Steam market listing page URL
+
+---
+
+## Choosing the Right Endpoint
+
+### Decision Matrix
+
+**Need current prices?** → `priceoverview`
+
+**Need order book depth?** → `itemordershistogram`
+
+**Need real-time trades?** → `itemordersactivity`
+
+**Need historical trends?** → `pricehistory`
+
+### Combining Endpoints
+
+For comprehensive market coverage, track the same item with multiple endpoints:
+
+```yaml
+TRACKING_ITEMS:
+  # Same item, different endpoints
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    apiid: 'priceoverview'
+    polling-interval-in-seconds: 60
+    
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    apiid: 'itemordershistogram'
+    item_nameid: 176582392
+    polling-interval-in-seconds: 30
+    
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    apiid: 'itemordersactivity'
+    item_nameid: 176582392
+    polling-interval-in-seconds: 15
+    
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    apiid: 'pricehistory'
+    polling-interval-in-seconds: 3600
+```
+
+<Tip>
+  Each endpoint consumes separate rate limit tokens. Make sure your total request load stays within limits.
+</Tip>
+
+## Rate Limiting Considerations
+
+Endpoint impact on rate limits (requests per 60s with example intervals):
+
+| Endpoint | Example Interval | Requests/60s |
+|----------|------------------|-------------|
+| `priceoverview` | 30s | 2 |
+| `itemordershistogram` | 15s | 4 |
+| `itemordersactivity` | 8s | 7.5 |
+| `pricehistory` | 3600s | 0.017 |
+
+**Total**: 13.5 requests per 60s (within limit of 15)
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="lock" href="/configuration/authentication">
+    Setup cookies for pricehistory endpoint
+  </Card>
+  <Card title="Config Reference" icon="book" href="/configuration/config-reference">
+    Complete parameter reference
+  </Card>
+</CardGroup>

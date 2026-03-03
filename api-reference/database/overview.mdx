@@ -1,0 +1,155 @@
+---
+title: 'Database Schema Overview'
+description: 'Understanding the SQLite database structure for Steam Market data storage'
+icon: 'database'
+---
+
+## Introduction
+
+Hridaya Steam Market Tracker stores all data in a SQLite database (`market_data.db`). The schema is designed to capture different aspects of market data across four specialized tables.
+
+## Database Location
+
+```
+data/market_data.db
+```
+
+The database uses SQLite with Write-Ahead Logging (WAL) for improved concurrency and performance optimizations.
+
+## Architecture
+
+### Storage Strategy
+
+- **SQLite** for operational snapshots (real-time data)
+- **TimescaleDB** (optional) for historical time-series data
+- **Write-Ahead Logging** (WAL) for concurrent access
+- **Automatic indexing** on common query patterns
+
+### Performance Optimizations
+
+```python
+PRAGMA busy_timeout=30000        # Wait up to 30s for locks
+PRAGMA journal_mode=WAL          # Write-Ahead Logging
+PRAGMA synchronous=NORMAL        # Balance safety vs speed
+PRAGMA cache_size=-64000         # 64MB cache
+PRAGMA temp_store=MEMORY         # Store temp tables in RAM
+PRAGMA mmap_size=268435456       # 256MB memory-mapped I/O
+PRAGMA page_size=4096            # Optimal page size
+```
+
+## Schema Tables
+
+The database contains four main tables, each serving a specific purpose:
+
+<CardGroup cols={2}>
+  <Card title="price_overview" icon="chart-line" href="/api-reference/database/price-overview">
+    Current market prices, volumes, and snapshots - the data you see on item listing pages
+  </Card>
+  
+  <Card title="orders_histogram" icon="chart-bar" href="/api-reference/database/orders-histogram">
+    Full order book snapshots with buy/sell orders at each price level
+  </Card>
+  
+  <Card title="orders_activity" icon="clock-rotate-left" href="/api-reference/database/orders-activity">
+    Recent trade activity feed - actual purchases and new listings as they happen
+  </Card>
+  
+  <Card title="price_history" icon="calendar-days" href="/api-reference/database/price-history">
+    Historical hourly price and volume data going back years
+  </Card>
+</CardGroup>
+
+## Common Patterns
+
+### Timestamps
+
+- All timestamps are stored in **UTC**
+- Format: `DATETIME` type in SQLite
+- Automatically set to `CURRENT_TIMESTAMP` on insert
+
+### Item Identification
+
+Every record includes:
+- `appid` - Steam application ID (730 for CS2, 570 for Dota 2, etc.)
+- `market_hash_name` - Exact item name (e.g., "AK-47 | Redline (Field-Tested)")
+- `item_nameid` - Steam's internal numeric item ID (optional for some endpoints)
+
+### Localization Fields
+
+All tables store the request context:
+- `currency` - ISO 4217 code (USD, EUR, GBP, etc.)
+- `country` - Two-letter country code (US, GB, etc.)
+- `language` - Language used for request (english, french, etc.)
+
+### JSON Data
+
+Complex structures are stored as JSON strings:
+- Order books (`buy_order_table`, `sell_order_table`)
+- Activity feeds (`parsed_activities`)
+- Graph data for visualization
+
+Use SQLite's `json_extract()` function to query JSON fields.
+
+## Indexes
+
+All tables are indexed for optimal query performance:
+
+```sql
+-- Primary lookup pattern: get latest data for an item
+CREATE INDEX idx_{table}_item_time 
+  ON {table}(market_hash_name, timestamp DESC);
+
+-- Time-based queries
+CREATE INDEX idx_{table}_timestamp 
+  ON {table}(timestamp DESC);
+
+-- App-specific queries
+CREATE INDEX idx_overview_appid 
+  ON price_overview(appid, market_hash_name, timestamp DESC);
+```
+
+## Connecting to the Database
+
+### Using SQLite CLI
+
+```bash
+sqlite3 data/market_data.db
+```
+
+### Using Python
+
+```python
+import sqlite3
+
+conn = sqlite3.connect('data/market_data.db')
+cursor = conn.cursor()
+
+cursor.execute("SELECT * FROM price_overview LIMIT 5")
+for row in cursor.fetchall():
+    print(row)
+
+conn.close()
+```
+
+### Using Python Async
+
+```python
+import aiosqlite
+
+async with aiosqlite.connect('data/market_data.db') as db:
+    async with db.execute("SELECT * FROM price_overview LIMIT 5") as cursor:
+        async for row in cursor:
+            print(row)
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Table Schemas" icon="table" href="/api-reference/database/price-overview">
+    Detailed schema documentation for each table
+  </Card>
+  
+  <Card title="Query Examples" icon="code" href="/api-reference/database/queries">
+    Common SQL query patterns and examples
+  </Card>
+</CardGroup>

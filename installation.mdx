@@ -1,0 +1,663 @@
+---
+title: Installation
+description: Detailed installation guide and configuration options for Hridaya
+---
+
+## Prerequisites
+
+<CardGroup cols={2}>
+  <Card title="Python 3.10+" icon="python">
+    Hridaya uses modern async syntax and type hints
+  </Card>
+  <Card title="Git" icon="git">
+    Required for cloning the repository
+  </Card>
+  <Card title="pip" icon="box">
+    Python package manager
+  </Card>
+  <Card title="SQLite 3.35+" icon="database">
+    Usually included with Python
+  </Card>
+</CardGroup>
+
+<Note>
+**Optional**: PostgreSQL 13+ with TimescaleDB extension for high-volume historical data storage
+</Note>
+
+## Installation steps
+
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/yourusername/hridaya.git
+    cd hridaya
+    ```
+  </Step>
+
+  <Step title="Create a virtual environment (recommended)">
+    ```bash
+    # Create virtual environment
+    python -m venv venv
+
+    # Activate it
+    # On Linux/macOS:
+    source venv/bin/activate
+
+    # On Windows:
+    venv\Scripts\activate
+    ```
+
+    <Tip>
+    Virtual environments isolate Hridaya's dependencies from your system Python, preventing version conflicts.
+    </Tip>
+  </Step>
+
+  <Step title="Install dependencies">
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    <Accordion title="Core dependencies explained">
+      ```txt requirements.txt
+      # Async HTTP client for Steam API calls
+      aiohttp==3.13.2
+      aiohappyeyeballs==2.6.1  # IPv6/IPv4 fallback for aiohttp
+      aiosignal==1.4.0
+      
+      # Async database drivers
+      aiosqlite==0.22.0   # SQLite async driver
+      asyncpg==0.31.0     # PostgreSQL async driver (for TimescaleDB)
+      
+      # Data validation and parsing
+      pydantic==2.12.5         # Type-safe data models
+      pydantic_core==2.41.5
+      annotated-types==0.7.0
+      
+      # Configuration and environment
+      PyYAML==6.0.3           # YAML config parsing
+      python-dotenv==1.2.1    # .env file support
+      
+      # Utilities
+      attrs==25.4.0
+      frozenlist==1.8.0
+      idna==3.11
+      multidict==6.7.0
+      propcache==0.4.1
+      yarl==1.22.0
+      typing-inspection==0.4.2
+      typing_extensions==4.15.0
+      ```
+    </Accordion>
+  </Step>
+
+  <Step title="Verify installation">
+    ```bash
+    python -c "import aiohttp, aiosqlite, pydantic, yaml; print('All dependencies installed successfully!')"
+    ```
+
+    You should see:
+    ```
+    All dependencies installed successfully!
+    ```
+  </Step>
+</Steps>
+
+## Configuration
+
+### Basic configuration (config.yaml)
+
+Hridaya uses a YAML configuration file to define rate limits and tracking items.
+
+<CodeGroup>
+
+```yaml config.yaml - Complete example
+# RATE LIMITS
+# Steam enforces 15 requests per 60 seconds globally per IP
+LIMITS:
+  REQUESTS: 15          # Max requests allowed
+  WINDOW_SECONDS: 60    # Time window in seconds
+
+# TRACKING ITEMS
+TRACKING_ITEMS:
+  # Example 1: Real-time trade activity
+  - market_hash_name: "Revolution Case"
+    appid: 730                           # CS2 app ID
+    currency: 1                          # 1=USD, 2=GBP, 3=EUR, 6=RUB, etc.
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 8       # Poll every 8 seconds
+    apiid: 'itemordersactivity'         # Endpoint type
+
+  # Example 2: Historical price data
+  - market_hash_name: "AWP | Neo-Noir (Factory New)"
+    appid: 730
+    currency: 3                          # EUR
+    country: 'IN'
+    language: 'english'
+    polling-interval-in-seconds: 60      # Poll every 60 seconds
+    apiid: 'pricehistory'               # Requires Steam cookies
+  
+  # Example 3: Order book snapshots
+  - market_hash_name: "Dreams & Nightmares Case"
+    appid: 730
+    currency: 2                          # GBP
+    country: 'IN'
+    language: 'english'
+    polling-interval-in-seconds: 30      # Poll every 30 seconds
+    apiid: 'itemordershistogram'        # Requires item_nameid
+  
+  # Example 4: Current market prices
+  - market_hash_name: "MP9 | Starlight Protector (Field-Tested)"
+    appid: 730
+    currency: 2
+    country: 'IN'
+    language: 'english'
+    polling-interval-in-seconds: 60
+    apiid: 'priceoverview'              # Simplest endpoint
+```
+
+```yaml Minimal configuration
+LIMITS:
+  REQUESTS: 15
+  WINDOW_SECONDS: 60
+
+TRACKING_ITEMS:
+  - market_hash_name: "Revolution Case"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 30
+    apiid: 'priceoverview'
+```
+
+</CodeGroup>
+
+### Configuration field reference
+
+<ParamField path="LIMITS.REQUESTS" type="integer" required>
+  Maximum number of API requests allowed per time window. Steam enforces **15 requests per 60 seconds** globally.
+</ParamField>
+
+<ParamField path="LIMITS.WINDOW_SECONDS" type="integer" required>
+  Time window in seconds for rate limiting. Keep at **60** to match Steam's limits.
+</ParamField>
+
+<ParamField path="TRACKING_ITEMS[].market_hash_name" type="string" required>
+  Exact market name of the item as it appears on Steam Community Market.
+  
+  Examples:
+  - `"Revolution Case"`
+  - `"AWP | Neo-Noir (Factory New)"`
+  - `"Sticker | Ninjas in Pyjamas | Katowice 2014"`
+</ParamField>
+
+<ParamField path="TRACKING_ITEMS[].appid" type="integer" required>
+  Steam application ID.
+  
+  Common values:
+  - `730` - Counter-Strike 2 (CS2)
+  - `570` - Dota 2
+  - `440` - Team Fortress 2
+  - `252490` - Rust
+  - `753` - Steam (trading cards, backgrounds, emoticons)
+</ParamField>
+
+<ParamField path="TRACKING_ITEMS[].currency" type="integer" required>
+  Currency code for price display.
+  
+  Common values:
+  - `1` - USD (US Dollar)
+  - `2` - GBP (British Pound)
+  - `3` - EUR (Euro)
+  - `6` - RUB (Russian Ruble)
+  - `7` - BRL (Brazilian Real)
+  - `9` - NOK (Norwegian Krone)
+</ParamField>
+
+<ParamField path="TRACKING_ITEMS[].country" type="string" required>
+  Two-letter country code (ISO 3166-1 alpha-2).
+  
+  Examples: `'US'`, `'GB'`, `'DE'`, `'IN'`, `'BR'`
+</ParamField>
+
+<ParamField path="TRACKING_ITEMS[].language" type="string" required>
+  Language for text responses.
+  
+  Examples: `'english'`, `'german'`, `'french'`, `'spanish'`
+</ParamField>
+
+<ParamField path="TRACKING_ITEMS[].polling-interval-in-seconds" type="integer" required>
+  How often to poll this item (in seconds).
+  
+  <Warning>
+  Must be feasible within rate limits. Hridaya validates this on startup.
+  </Warning>
+  
+  Recommended ranges:
+  - High-frequency: `8-15` seconds (order activity)
+  - Medium-frequency: `30-60` seconds (order books, prices)
+  - Low-frequency: `300-3600` seconds (historical data)
+</ParamField>
+
+<ParamField path="TRACKING_ITEMS[].apiid" type="string" required>
+  Which Steam Market API endpoint to use.
+  
+  Valid values:
+  - `'priceoverview'` - Current lowest/median price and volume
+  - `'itemordershistogram'` - Full order book (requires `item_nameid`)
+  - `'itemordersactivity'` - Recent trade history (requires `item_nameid`)
+  - `'pricehistory'` - Historical price chart (requires Steam cookies)
+</ParamField>
+
+<ParamField path="TRACKING_ITEMS[].item_nameid" type="integer">
+  Steam's internal numeric item ID. **Required** for `itemordershistogram` and `itemordersactivity`.
+  
+  <Tip>
+  For CS2 items, Hridaya auto-populates this from [steam-item-name-ids](https://github.com/somespecialone/steam-item-name-ids). For other games, you must provide it manually.
+  </Tip>
+  
+  Example:
+  ```yaml
+  - market_hash_name: "Revolution Case"
+    item_nameid: 176042118  # Manually specified
+    apiid: 'itemordershistogram'
+  ```
+</ParamField>
+
+### Environment variables (.env)
+
+Create a `.env` file in the project root for sensitive credentials:
+
+```bash .env
+# Required for pricehistory endpoint
+sessionid=YOUR_STEAM_SESSION_ID
+steamLoginSecure=YOUR_STEAM_LOGIN_SECURE_COOKIE
+
+# Optional Steam cookies
+browserid=YOUR_BROWSER_ID
+steamCountry=US
+```
+
+<Steps>
+  <Step title="Navigate to Steam Community Market">
+    Open https://steamcommunity.com/market/ in your browser while logged in.
+  </Step>
+
+  <Step title="Open Developer Tools">
+    Press `F12` or right-click → Inspect Element
+  </Step>
+
+  <Step title="Find cookies">
+    - Go to **Application** tab (Chrome) or **Storage** tab (Firefox)
+    - Navigate to **Cookies** → `https://steamcommunity.com`
+    - Copy values for:
+      - `sessionid`
+      - `steamLoginSecure`
+  </Step>
+
+  <Step title="Paste into .env">
+    ```bash
+    sessionid=PASTE_YOUR_VALUE_HERE
+    steamLoginSecure=PASTE_YOUR_VALUE_HERE
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+**Security reminder**:
+- Never commit `.env` to version control
+- Cookies expire - re-fetch them if `pricehistory` stops working
+- These cookies grant access to your Steam account - treat them like passwords
+</Warning>
+
+## Advanced: TimescaleDB setup (optional)
+
+For high-volume historical data, Hridaya supports TimescaleDB (PostgreSQL extension) as an alternative to SQLite for the `price_history` table.
+
+<Steps>
+  <Step title="Install PostgreSQL and TimescaleDB">
+    <Tabs>
+      <Tab title="Ubuntu/Debian">
+        ```bash
+        # Add PostgreSQL repository
+        sudo sh -c 'echo "deb https://apt.postgresql.org/pub/repos/apt $(lsb_release -cs)-pgdg main" > /etc/apt/sources.list.d/pgdg.list'
+        wget --quiet -O - https://www.postgresql.org/media/keys/ACCC4CF8.asc | sudo apt-key add -
+        
+        # Add TimescaleDB repository
+        sudo sh -c "echo 'deb https://packagecloud.io/timescale/timescaledb/ubuntu/ $(lsb_release -c -s) main' > /etc/apt/sources.list.d/timescaledb.list"
+        wget --quiet -O - https://packagecloud.io/timescale/timescaledb/gpgkey | sudo apt-key add -
+        
+        # Install
+        sudo apt update
+        sudo apt install postgresql-14 timescaledb-2-postgresql-14
+        
+        # Configure TimescaleDB
+        sudo timescaledb-tune
+        sudo systemctl restart postgresql
+        ```
+      </Tab>
+      <Tab title="macOS">
+        ```bash
+        # Install via Homebrew
+        brew install postgresql timescaledb
+        
+        # Start PostgreSQL
+        brew services start postgresql
+        ```
+      </Tab>
+      <Tab title="Docker">
+        ```bash
+        docker run -d \
+          --name timescaledb \
+          -p 5432:5432 \
+          -e POSTGRES_PASSWORD=password \
+          timescale/timescaledb:latest-pg14
+        ```
+      </Tab>
+    </Tabs>
+  </Step>
+
+  <Step title="Create database and enable extension">
+    ```bash
+    # Connect to PostgreSQL
+    psql -U postgres
+    ```
+
+    ```sql
+    -- Create database
+    CREATE DATABASE steam_market;
+    
+    -- Connect to it
+    \c steam_market
+    
+    -- Enable TimescaleDB extension
+    CREATE EXTENSION IF NOT EXISTS timescaledb;
+    
+    -- Create user for Hridaya
+    CREATE USER hridaya WITH PASSWORD 'your_secure_password';
+    GRANT ALL PRIVILEGES ON DATABASE steam_market TO hridaya;
+    ```
+  </Step>
+
+  <Step title="Configure Hridaya to use TimescaleDB">
+    Modify the `SQLinserts` initialization in your code:
+
+    ```python
+    # In your scheduler or main script
+    from src.SQLinserts import SQLinserts
+
+    wizard = SQLinserts(
+        sqlite_path="data/market_data.db",  # Still used for live data
+        timescale_dsn="postgresql://hridaya:your_secure_password@localhost:5432/steam_market",
+        timescale_pool_min=10,   # Min connections
+        timescale_pool_max=100   # Max connections
+    )
+    ```
+
+    <Note>
+    When TimescaleDB is configured:
+    - `price_overview`, `orders_histogram`, `orders_activity` → SQLite
+    - `price_history` → TimescaleDB (hypertable with compression)
+    </Note>
+  </Step>
+
+  <Step title="Verify hypertable creation">
+    ```sql
+    -- Check if price_history is a hypertable
+    SELECT * FROM timescaledb_information.hypertables;
+    
+    -- View compression policy
+    SELECT * FROM timescaledb_information.jobs WHERE proc_name = 'policy_compression';
+    
+    -- View retention policy
+    SELECT * FROM timescaledb_information.jobs WHERE proc_name = 'policy_retention';
+    ```
+
+    Hridaya automatically configures:
+    - **Compression**: Data older than 7 days
+    - **Retention**: Data older than 90 days is deleted
+    - **Partitioning**: By `market_hash_name` for optimal query performance
+  </Step>
+</Steps>
+
+<Accordion title="Why use TimescaleDB over SQLite?">
+  **SQLite is great for**:
+  - Development and testing
+  - Low-to-medium data volumes (< 1M rows)
+  - Single-instance deployments
+  - Simplicity (no separate database server)
+
+  **TimescaleDB excels at**:
+  - High-volume historical data (millions of price points)
+  - Automatic compression (10x+ space savings)
+  - Time-based queries ("last 30 days of data")
+  - Horizontal scaling potential
+  - Automatic data retention policies
+
+  **Example**: Tracking 100 items with hourly `pricehistory` data:
+  - SQLite: ~8.76M rows/year → ~2GB database
+  - TimescaleDB: ~8.76M rows/year → ~200MB compressed
+</Accordion>
+
+## Running Hridaya
+
+### Basic execution
+
+```bash
+python cerebro.py
+```
+
+### Running in the background
+
+<Tabs>
+  <Tab title="Linux/macOS (screen)">
+    ```bash
+    # Start a detached screen session
+    screen -S hridaya -dm python cerebro.py
+    
+    # Reattach to view logs
+    screen -r hridaya
+    
+    # Detach: Press Ctrl+A, then D
+    
+    # Kill the session
+    screen -S hridaya -X quit
+    ```
+  </Tab>
+  
+  <Tab title="Linux (systemd)">
+    Create `/etc/systemd/system/hridaya.service`:
+    
+    ```ini
+    [Unit]
+    Description=Hridaya Steam Market Tracker
+    After=network.target
+
+    [Service]
+    Type=simple
+    User=youruser
+    WorkingDirectory=/path/to/hridaya
+    Environment="PATH=/path/to/hridaya/venv/bin"
+    ExecStart=/path/to/hridaya/venv/bin/python cerebro.py
+    Restart=always
+    RestartSec=10
+
+    [Install]
+    WantedBy=multi-user.target
+    ```
+    
+    ```bash
+    # Enable and start service
+    sudo systemctl daemon-reload
+    sudo systemctl enable hridaya
+    sudo systemctl start hridaya
+    
+    # View logs
+    sudo journalctl -u hridaya -f
+    
+    # Stop service
+    sudo systemctl stop hridaya
+    ```
+  </Tab>
+  
+  <Tab title="Docker">
+    Create `Dockerfile`:
+    
+    ```dockerfile
+    FROM python:3.11-slim
+    
+    WORKDIR /app
+    
+    COPY requirements.txt .
+    RUN pip install --no-cache-dir -r requirements.txt
+    
+    COPY . .
+    
+    CMD ["python", "cerebro.py"]
+    ```
+    
+    ```bash
+    # Build image
+    docker build -t hridaya .
+    
+    # Run container
+    docker run -d \
+      --name hridaya \
+      --restart unless-stopped \
+      -v $(pwd)/data:/app/data \
+      -v $(pwd)/config.yaml:/app/config.yaml \
+      -v $(pwd)/.env:/app/.env \
+      hridaya
+    
+    # View logs
+    docker logs -f hridaya
+    
+    # Stop container
+    docker stop hridaya
+    ```
+  </Tab>
+</Tabs>
+
+## Validation and troubleshooting
+
+### Configuration validation
+
+Hridaya performs comprehensive validation on startup:
+
+```python cerebro.py:60-110
+def validate_required_fields(self, items: list):
+    """Validate that each item has all required fields."""
+    valid_apiids = {'priceoverview', 'itemordershistogram', 'itemordersactivity', 'pricehistory'}
+    
+    for index, item in enumerate(items):
+        # Check universal required fields
+        required = ['market_hash_name', 'apiid', 'polling-interval-in-seconds', 'appid']
+        
+        for field in required:
+            if field not in item:
+                print(f"\n❌ CONFIG ERROR: Item {index + 1} missing required field '{field}'")
+                exit(1)
+        
+        # Validate apiid is recognized
+        if item['apiid'] not in valid_apiids:
+            print(f"\n❌ CONFIG ERROR: Item {index + 1} has invalid apiid '{item['apiid']}'")
+            exit(1)
+        
+        # Check endpoint-specific required fields
+        if item['apiid'] in ('itemordershistogram', 'itemordersactivity'):
+            if 'item_nameid' not in item:
+                print(f"\n❌ CONFIG ERROR: Item {index + 1} missing 'item_nameid'")
+                exit(1)
+```
+
+### Feasibility validation
+
+```python cerebro.py:112-139
+def validate_config_feasibility(self, rate_limit: int, window_seconds: int, items: list):
+    """Validate that config is feasible given rate limits."""
+    total_reqs = 0
+
+    for item in items:
+        reqs_per_window = window_seconds // item['polling-interval-in-seconds']
+        total_reqs += reqs_per_window
+
+    if total_reqs > rate_limit:
+        print(f"\n❌ CONFIG ERROR: Infeasible configuration")
+        print(f"   Calculated: {total_reqs} requests per {window_seconds}s")
+        print(f"   Limit: {rate_limit} requests per {window_seconds}s")
+        exit(1)
+
+    # Success - config is feasible
+    utilization = (total_reqs / rate_limit) * 100
+    print(f"  ✓ Config feasible: {total_reqs} req/{window_seconds}s ({utilization:.1f}% capacity)")
+```
+
+### Common issues
+
+<AccordionGroup>
+  <Accordion title="ModuleNotFoundError: No module named 'aiohttp'">
+    **Cause**: Dependencies not installed or wrong Python environment.
+    
+    **Solution**:
+    ```bash
+    # Ensure virtual environment is activated
+    source venv/bin/activate  # or venv\Scripts\activate on Windows
+    
+    # Reinstall dependencies
+    pip install -r requirements.txt
+    ```
+  </Accordion>
+
+  <Accordion title="FileNotFoundError: config.yaml not found">
+    **Cause**: Running `cerebro.py` from wrong directory.
+    
+    **Solution**:
+    ```bash
+    # Ensure you're in the project root
+    cd /path/to/hridaya
+    python cerebro.py
+    ```
+  </Accordion>
+
+  <Accordion title="sqlite3.OperationalError: unable to open database file">
+    **Cause**: `data/` directory doesn't exist.
+    
+    **Solution**:
+    ```bash
+    mkdir -p data
+    python cerebro.py
+    ```
+  </Accordion>
+
+  <Accordion title="asyncpg.exceptions.InvalidCatalogNameError">
+    **Cause**: TimescaleDB database doesn't exist.
+    
+    **Solution**:
+    ```sql
+    psql -U postgres
+    CREATE DATABASE steam_market;
+    \c steam_market
+    CREATE EXTENSION timescaledb;
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Quickstart guide"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get up and running in 5 minutes
+  </Card>
+  <Card
+    title="API reference"
+    icon="code"
+    href="/api-reference/database/overview"
+  >
+    Explore the Steam Market API endpoints
+  </Card>
+</CardGroup>

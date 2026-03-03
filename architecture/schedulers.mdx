@@ -1,0 +1,634 @@
+---
+title: 'Schedulers'
+description: 'Dual scheduling system: urgency-based snoozer and fixed-interval clockwork'
+icon: 'clock'
+---
+
+## Overview
+
+The Hridaya Steam Market Tracker uses **two complementary schedulers** to optimize data collection based on endpoint characteristics:
+
+<CardGroup cols={2}>
+  <Card title="snoozerScheduler" icon="battery-bolt">
+    **Urgency-based scheduling** for real-time market data
+    
+    - `priceoverview` - Current prices
+    - `itemordershistogram` - Order book depth
+    - `itemordersactivity` - Recent transactions
+  </Card>
+  
+  <Card title="ClockworkScheduler" icon="clock-rotate-left">
+    **Fixed-interval scheduling** for historical data
+    
+    - `pricehistory` - Hourly price snapshots
+    - Runs at :30 past every UTC hour
+  </Card>
+</CardGroup>
+
+## snoozerScheduler: Urgency-Based Scheduling
+
+### Design Philosophy
+
+The snoozer scheduler treats each item's polling interval as a **deadline**, not a fixed schedule:
+
+```
+Traditional Fixed Scheduler:
+  Item A: Execute every 60s → t=0, t=60, t=120, ...
+  Item B: Execute every 120s → t=0, t=120, t=240, ...
+  
+  Problem: Both execute at t=0, t=120, ... (bursty)
+
+snoozerScheduler (Urgency-Based):
+  Item A: Urgency reaches 1.0 at t=60 → execute whenever urgent
+  Item B: Urgency reaches 1.0 at t=120 → execute whenever urgent
+  
+  Benefit: Natural spreading, executes most urgent item first
+```
+
+### Urgency Calculation
+
+```python snoozerScheduler.py:70-94
+def calculate_urgency(self, item: dict) -> float:
+    """
+    Calculate urgency score for an item.
+
+    Urgency = (time since last update) / (target polling rate)
+    
+    Returns 0.0 if item is in cooldown.
+    """
+    # If in backoff cooldown, urgency is 0 (never urgent)
+    if item.get('skip_until') and datetime.now() < item['skip_until']:
+        return 0.0
+    
+    if item['last_update'] is None:
+        return float('inf')  # Never updated = infinitely urgent
+
+    delta = datetime.now() - item['last_update']
+    
+    urgency = delta.total_seconds() / item['polling-interval-in-seconds']
+    return urgency
+```
+
+**Urgency score interpretation:**
+
+| Score | Meaning | Action |
+|-------|---------|--------|
+| `∞` | Never executed | Execute immediately |
+| `>= 1.0` | Overdue (deadline passed) | Execute now |
+| `0.5` | Halfway to deadline | Wait |
+| `0.0` | Just updated OR in cooldown | Wait |
+
+**Example:**
+
+<CodeGroup>
+```python Item Configuration
+item = {
+    'market_hash_name': 'AK-47 | Redline (FT)',
+    'polling-interval-in-seconds': 60,  # Target: every 60 seconds
+    'last_update': datetime(2024, 3, 3, 14, 0, 0)  # Last updated at 14:00:00
+}
+```
+
+```python Urgency at 14:00:30 (30s later)
+delta = 30 seconds
+urgency = 30 / 60 = 0.5  # Halfway to deadline
+# Action: Wait
+```
+
+```python Urgency at 14:01:00 (60s later)
+delta = 60 seconds
+urgency = 60 / 60 = 1.0  # Exactly at deadline
+# Action: Execute
+```
+
+```python Urgency at 14:01:30 (90s later)
+delta = 90 seconds
+urgency = 90 / 60 = 1.5  # 50% overdue
+# Action: Execute immediately (highest priority)
+```
+</CodeGroup>
+
+### Main Scheduling Loop
+
+```python snoozerScheduler.py:245-271
+async def run(self) -> None:
+    """
+    Main scheduler loop using urgency-based algorithm.
+
+    Algorithm:
+    1. Calculate urgency for all items
+    2. If max_urgency >= 1.0, execute that item and loop
+    3. If max_urgency < 1.0, sleep until next item is overdue
+    4. Repeat forever
+    """
+    async with SteamAPIClient(rate_limiter=self.rate_limiter) as client, SQLinserts() as wizard:
+        self.steam_client = client
+        self.data_wizard = wizard
+
+        while True:
+            # Execute ALL items that are overdue (urgency >= 1.0)
+            executed_any = False
+            for item in self.live_items:
+                urgency = self.calculate_urgency(item)
+                if urgency >= 1.0:
+                    await self.execute_item(item)
+                    executed_any = True
+
+            # If nothing was urgent, sleep until the next item becomes urgent
+            if not executed_any:
+                sleep_duration = self.calculate_min_sleep_duration()
+                await asyncio.sleep(sleep_duration)
+```
+
+**Key insight:** The loop executes **all** overdue items before sleeping, not just the most urgent one.
+
+### Smart Sleep Calculation
+
+The scheduler calculates the **minimum** time until **any** item becomes actionable:
+
+```python snoozerScheduler.py:96-127
+def calculate_min_sleep_duration(self) -> float:
+    """
+    Calculate MINIMUM sleep time until ANY item becomes actionable.
+
+    Checks all items and returns the shortest time until any item:
+    - Reaches urgency 1.0 (overdue), OR
+    - Exits 429 cooldown (skip_until reached)
+    """
+    min_sleep = float('inf')
+
+    for item in self.live_items:
+        # Check if item is in 429 cooldown
+        if item.get('skip_until') and datetime.now() < item['skip_until']:
+            # Time until cooldown ends
+            time_until_cooldown_ends = (item['skip_until'] - datetime.now()).total_seconds()
+            min_sleep = min(min_sleep, time_until_cooldown_ends)
+
+        else:
+            # Normal urgency calculation
+            urgency = self.calculate_urgency(item)
+            if urgency < 1.0:  # Only consider items that aren't already overdue
+                # Time until this item becomes urgent (urgency = 1.0)
+                time_until_urgent = (1.0 - urgency) * item['polling-interval-in-seconds']
+                min_sleep = min(min_sleep, time_until_urgent)
+
+    # If all items are overdue, don't sleep
+    return min_sleep if min_sleep != float('inf') else 0
+```
+
+**Example scenario:**
+
+<Steps>
+  <Step title="Current State">
+    - Item A: urgency = 0.8 (20% until deadline) → 12 seconds remaining
+    - Item B: urgency = 0.5 (50% until deadline) → 60 seconds remaining
+    - Item C: in cooldown until 30 seconds from now
+  </Step>
+  
+  <Step title="Calculate Minimum Sleep">
+    ```python
+    min_sleep = min(12, 60, 30) = 12 seconds
+    ```
+    
+    Wake up when Item A becomes urgent (soonest event).
+  </Step>
+  
+  <Step title="After Sleep (12s later)">
+    - Item A: urgency = 1.0 → **Execute**
+    - Item B: urgency = 0.6 → Wait
+    - Item C: still in cooldown → Wait
+  </Step>
+</Steps>
+
+### Exponential Backoff
+
+Transient errors (429, 5xx, network) trigger exponential backoff:
+
+```python snoozerScheduler.py:129-159
+def apply_exponential_backoff(self, item: dict, error_code: int) -> None:
+    """
+    Apply exponential backoff for rate limit (429), server (5xx), or network errors.
+    
+    Backoff strategy:
+    - 1st error: skip 1 polling interval
+    - 2nd consecutive: skip 2 intervals
+    - 3rd consecutive: skip 4 intervals
+    - Capped at 8x the polling interval
+    """
+    item['consecutive_backoffs'] = item.get('consecutive_backoffs', 0) + 1
+    
+    # Skip N polling intervals, where N = 2^(consecutive - 1), capped at 8
+    skip_multiplier = min(2 ** (item['consecutive_backoffs'] - 1), 8)
+    skip_seconds = item['polling-interval-in-seconds'] * skip_multiplier
+    
+    item['skip_until'] = datetime.now() + timedelta(seconds=skip_seconds)
+    
+    if error_code == 429:
+        error_type = "rate limited"
+    elif error_code == 0:
+        error_type = "network error"
+    else:
+        error_type = f"server error {error_code}"
+    
+    print(f"  ⏸ {error_type} on {item['market_hash_name']}:{item['apiid']} - "
+          f"cooling down {skip_seconds:.0f}s (attempt #{item['consecutive_backoffs']})")
+```
+
+**Backoff progression example:**
+
+<Tabs>
+  <Tab title="60s Polling Interval">
+    | Attempt | Multiplier | Cooldown | Total Delay |
+    |---------|------------|----------|-------------|
+    | 1st error | 2^0 = 1 | 60s | 60s |
+    | 2nd error | 2^1 = 2 | 120s | 180s |
+    | 3rd error | 2^2 = 4 | 240s | 420s |
+    | 4th error | 2^3 = 8 (cap) | 480s | 900s |
+    | 5th+ error | 8 (cap) | 480s | +480s each |
+  </Tab>
+  
+  <Tab title="300s Polling Interval">
+    | Attempt | Multiplier | Cooldown | Total Delay |
+    |---------|------------|----------|-------------|
+    | 1st error | 1 | 300s (5m) | 5m |
+    | 2nd error | 2 | 600s (10m) | 15m |
+    | 3rd error | 4 | 1200s (20m) | 35m |
+    | 4th error | 8 (cap) | 2400s (40m) | 75m |
+  </Tab>
+</Tabs>
+
+**Backoff resets on success:**
+
+```python snoozerScheduler.py:208-210
+# SUCCESS: Reset backoff tracking
+item['consecutive_backoffs'] = 0
+item['skip_until'] = None
+```
+
+### Item Execution Flow
+
+```python snoozerScheduler.py:161-243 (simplified)
+async def execute_item(self, item: dict) -> None:
+    # Check cooldown
+    if item.get('skip_until') and datetime.now() < item['skip_until']:
+        return  # Silently skip
+    
+    try:
+        # Route to correct API endpoint
+        match item['apiid']:
+            case 'priceoverview':
+                result = await self.steam_client.fetch_price_overview(...)
+            case 'itemordershistogram':
+                result = await self.steam_client.fetch_orders_histogram(...)
+            case 'itemordersactivity':
+                result = await self.steam_client.fetch_orders_activity(...)
+
+        # Store to database
+        await self.data_wizard.store_data(result, item)
+
+        # SUCCESS: Reset backoff, update timestamp
+        item['consecutive_backoffs'] = 0
+        item['skip_until'] = None
+        item['last_update'] = datetime.now()
+
+    except aiohttp.ClientResponseError as e:
+        if e.status == 429 or e.status >= 500:
+            # Transient error - exponential backoff
+            self.apply_exponential_backoff(item, e.status)
+```
+
+<Note>
+  **Rate limiting happens transparently** in `steam_client.fetch_*()` via `await rate_limiter.acquire_token()`.
+  
+  The scheduler is unaware of rate limiting delays - it just sees slower API calls.
+</Note>
+
+---
+
+## ClockworkScheduler: Fixed-Interval Scheduling
+
+### Design Philosophy
+
+Steam's `pricehistory` endpoint returns hourly aggregated data. Polling it every 30 seconds wastes API quota:
+
+```
+Steam updates pricehistory: 00:00, 01:00, 02:00, ... (hourly)
+Data availability lag: ~20-30 minutes after the hour
+
+Optimal schedule: Poll at :30 past every hour (00:30, 01:30, 02:30, ...)
+```
+
+**Why :30 past the hour?**
+
+- Steam updates historical data at the top of the hour (00:00, 01:00, ...)
+- Updates take 20-30 minutes to propagate
+- Polling at :30 ensures data is available while minimizing lag
+
+### Next Execution Calculation
+
+```python clockworkScheduler.py:69-86
+def get_next_execution_time(self) -> datetime:
+    """
+    Calculate the next execution time (:30 past the next hour).
+
+    Returns:
+        Datetime of next execution (next hour at :30 UTC)
+    """
+    # Get current UTC time
+    now = datetime.now(timezone.utc)
+
+    # Start with :30 of current hour
+    next_run = now.replace(minute=30, second=0, microsecond=0)
+
+    # If we're past :30, move to next hour
+    if now.minute >= 30:
+        next_run = next_run + timedelta(hours=1)
+
+    return next_run
+```
+
+**Example calculations:**
+
+<CodeGroup>
+```python Current time: 14:15 UTC
+next_run = 14:30 UTC  # Same hour, not past :30 yet
+sleep = 15 minutes
+```
+
+```python Current time: 14:45 UTC
+next_run = 15:30 UTC  # Next hour, already past :30
+sleep = 45 minutes
+```
+
+```python Current time: 14:30:00 UTC (exactly :30)
+next_run = 15:30 UTC  # Move to next hour (>= 30 triggers next)
+sleep = 60 minutes
+```
+</CodeGroup>
+
+### Main Scheduling Loop
+
+```python clockworkScheduler.py:187-210
+async def run(self) -> None:
+    """
+    Main clockwork loop.
+
+    Algorithm:
+    1. Run pricehistory immediately on startup
+    2. Calculate next :30 past the hour
+    3. Sleep until that time
+    4. Execute all pricehistory items
+    5. Repeat from step 2
+    """
+    async with SteamAPIClient(rate_limiter=self.rate_limiter) as client, SQLinserts() as wizard:
+        self.steam_client = client
+        self.data_wizard = wizard
+
+        # Run once immediately
+        await self.run_initial_fetch()
+
+        while True:
+            next_execution = self.get_next_execution_time()
+            sleep_seconds = self.calculate_sleep_duration(next_execution)
+            print(f"  Historical collector sleeping until {next_execution.strftime('%H:%M:%S')} UTC ({sleep_seconds:.0f} seconds)")
+            await asyncio.sleep(sleep_seconds)
+            await self.execute_history_items()
+```
+
+**Key behaviors:**
+
+<AccordionGroup>
+  <Accordion title="Why run immediately on startup?">
+    ```python
+    # Run once immediately
+    await self.run_initial_fetch()
+    ```
+    
+    Ensures you have historical data **right away** instead of waiting up to 60 minutes for the first scheduled run.
+    
+    Example: Start at 14:45 UTC
+    - Without initial fetch: wait until 15:30 (45 min)
+    - With initial fetch: data available in ~10 seconds
+  </Accordion>
+  
+  <Accordion title="Why sleep instead of polling?">
+    Historical data changes once per hour. Polling every minute would:
+    
+    - Waste 59 API calls per hour (98% wasted)
+    - Increase 429 risk
+    - Delay other endpoints (shared rate limiter)
+    
+    Sleeping is more efficient and respectful of API limits.
+  </Accordion>
+</AccordionGroup>
+
+### Retry Logic with Fixed Backoff
+
+Unlike snoozer's exponential backoff, clockwork uses **fixed retry delays**:
+
+```python clockworkScheduler.py:113-176 (simplified)
+async def _fetch_item_with_retry(self, item: dict, max_retries: int = 4) -> None:
+    """
+    Fetch price history for a single item with retry logic.
+    
+    Retries transient errors (429, 5xx, network) and auth errors (400, 401, 403)
+    with backoff. Auth errors are retried because cookies can be hot-swapped in .env.
+    """
+    backoff_seconds = [30, 60, 120, 240]  # Fixed delays for each retry
+    
+    for attempt in range(max_retries + 1):
+        try:
+            result = await self.steam_client.fetch_price_history(...)
+            await self.data_wizard.store_data(result, item)
+            item['last_update'] = datetime.now()
+            return  # Success
+
+        except aiohttp.ClientResponseError as e:
+            if e.status == 429 or e.status >= 500:
+                # Transient error - retry
+                if attempt < max_retries:
+                    delay = backoff_seconds[attempt]
+                    print(f"  ⏸ {item['market_hash_name']}: {error_type} - retrying in {delay}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(delay)
+            elif e.status in (400, 401, 403):
+                # Auth error - retry (cookies can be hot-swapped)
+                if attempt < max_retries:
+                    delay = backoff_seconds[attempt]
+                    print(f"  ⏸ {item['market_hash_name']}: HTTP {e.status} (cookie error?) - update .env, retrying in {delay}s")
+                    await asyncio.sleep(delay)
+```
+
+**Retry schedule:**
+
+| Attempt | Wait Before Retry | Cumulative Time |
+|---------|-------------------|------------------|
+| 1st (initial) | 0s | 0s |
+| 2nd | 30s | 30s |
+| 3rd | 60s | 90s |
+| 4th | 120s | 210s |
+| 5th (final) | 240s | 450s (7.5 min) |
+
+**Why retry auth errors (400, 401, 403)?**
+
+```python
+# Steam cookies can be hot-swapped while the system runs:
+# 1. User updates .env file with new cookies
+# 2. Next pricehistory call reads fresh cookies (steamAPIclient.py:198)
+# 3. Retry succeeds with new credentials
+```
+
+This enables zero-downtime cookie rotation for long-running deployments.
+
+---
+
+## Scheduler Comparison
+
+| Aspect | snoozerScheduler | ClockworkScheduler |
+|--------|------------------|--------------------|
+| **Scheduling Strategy** | Urgency-based (dynamic) | Fixed-time (static) |
+| **Endpoints** | priceoverview, histogram, activity | pricehistory |
+| **Execution Trigger** | Urgency >= 1.0 | :30 past UTC hour |
+| **Sleep Calculation** | Minimum time until any item urgent | Time until next :30 |
+| **Error Handling** | Exponential backoff per item | Fixed retry delays |
+| **Backoff Cap** | 8x polling interval | 4 retries (7.5 min total) |
+| **Initial Behavior** | All items execute immediately | Fetch once, then schedule |
+| **Data Freshness** | High (5-60s latency) | Medium (30-90 min latency) |
+
+## Performance Characteristics
+
+<AccordionGroup>
+  <Accordion title="snoozerScheduler: Startup Burst">
+    All items have `last_update = None`, so urgency = ∞.
+    
+    **Example:** 50 items configured
+    - All 50 attempt to execute immediately
+    - Rate limiter serializes them (e.g., 100 req/5min = 1 req every 3s)
+    - Takes ~2.5 minutes to complete initial sweep
+    
+    After startup, items naturally spread based on their polling intervals.
+  </Accordion>
+  
+  <Accordion title="snoozerScheduler: Steady-State Spreading">
+    Items with different polling intervals naturally desynchronize:
+    
+    ```
+    Item A (30s): Execute at t=0, t=30, t=60, t=90, ...
+    Item B (60s): Execute at t=0, t=60, t=120, t=180, ...
+    Item C (45s): Execute at t=0, t=45, t=90, t=135, ...
+    
+    Result: Requests spread across time (0, 30, 45, 60, 90, ...)
+    ```
+    
+    This is more efficient than fixed scheduling which can cause burst collisions.
+  </Accordion>
+  
+  <Accordion title="ClockworkScheduler: Predictable Load">
+    All history items execute at the same time (:30 past hour).
+    
+    **Example:** 10 pricehistory items
+    - All execute between 14:30:00 and 14:30:30
+    - Rate limiter queues them (e.g., 1 req every 3s)
+    - Completes in ~30 seconds
+    
+    The burst is acceptable because it happens once per hour (low frequency).
+  </Accordion>
+</AccordionGroup>
+
+## Usage Examples
+
+<CodeGroup>
+```python Standalone snoozerScheduler
+from src.snoozerScheduler import snoozerScheduler
+import asyncio
+
+# Use default config.yaml
+scheduler = snoozerScheduler()
+await scheduler.run()
+```
+
+```python Standalone ClockworkScheduler
+from src.clockworkScheduler import ClockworkScheduler
+import asyncio
+
+scheduler = ClockworkScheduler()
+await scheduler.run()
+```
+
+```python Orchestrated (Recommended)
+from cerebro import Orchestrator
+import asyncio
+
+# Both schedulers run concurrently with shared rate limiter
+orchestrator = Orchestrator(config_path="config.yaml")
+await orchestrator.run()
+```
+</CodeGroup>
+
+## Configuration Tips
+
+<Tabs>
+  <Tab title="High-Frequency Trading">
+    ```yaml
+    TRACKING_ITEMS:
+      - market_hash_name: "AK-47 | Redline (FT)"
+        apiid: priceoverview
+        polling-interval-in-seconds: 5  # Very frequent
+        
+      - market_hash_name: "AK-47 | Redline (FT)"
+        apiid: itemordershistogram
+        polling-interval-in-seconds: 10
+    ```
+    
+    **Use case:** Arbitrage bots, real-time price monitoring
+  </Tab>
+  
+  <Tab title="Balanced Monitoring">
+    ```yaml
+    TRACKING_ITEMS:
+      - market_hash_name: "AWP | Asiimov (FT)"
+        apiid: priceoverview
+        polling-interval-in-seconds: 60  # Every minute
+        
+      - market_hash_name: "AWP | Asiimov (FT)"
+        apiid: pricehistory
+        polling-interval-in-seconds: 3600  # Ignored by clockwork
+    ```
+    
+    **Use case:** General market tracking, price alerts
+  </Tab>
+  
+  <Tab title="Historical Analysis">
+    ```yaml
+    TRACKING_ITEMS:
+      - market_hash_name: "AK-47 | Redline (FT)"
+        apiid: pricehistory
+        polling-interval-in-seconds: 3600
+        
+      - market_hash_name: "AWP | Asiimov (FT)"
+        apiid: pricehistory
+        polling-interval-in-seconds: 3600
+    ```
+    
+    **Use case:** Long-term trend analysis, research
+  </Tab>
+</Tabs>
+
+<Warning>
+  **Important:** `polling-interval-in-seconds` is **ignored** by ClockworkScheduler.
+  
+  History items always execute at :30 past the hour, regardless of configured interval. The field is still required for config validation.
+</Warning>
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Orchestrator" icon="tower-control" href="/architecture/orchestrator">
+    Learn how schedulers are coordinated
+  </Card>
+  <Card title="Rate Limiter" icon="gauge-high" href="/architecture/rate-limiter">
+    Understand shared rate limiting
+  </Card>
+  <Card title="Configuration Guide" icon="gear" href="/configuration/overview">
+    Configure polling intervals and endpoints
+  </Card>
+</CardGroup>

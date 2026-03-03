@@ -1,0 +1,175 @@
+---
+title: "RateLimiter"
+description: "Sliding window rate limiter for Steam Web API safety"
+---
+
+## Overview
+
+The `RateLimiter` class implements a Sliding Window Log algorithm to enforce configurable request limits per time window. It ensures safe interaction with the Steam Web API by preventing rate limit violations.
+
+## Class Definition
+
+```python
+from src.RateLimiter import RateLimiter
+
+rate_limiter = RateLimiter(max_requests=15, window_seconds=60.0)
+```
+
+### Constructor
+
+<ParamField path="max_requests" type="int" default={15}>
+  Maximum requests allowed per window
+</ParamField>
+
+<ParamField path="window_seconds" type="float" default={60.0}>
+  Time window in seconds
+</ParamField>
+
+## Attributes
+
+<ResponseField name="_lock" type="asyncio.Lock">
+  Async lock for thread-safe timestamp management
+</ResponseField>
+
+<ResponseField name="_timestamps" type="list[float]">
+  List of request timestamps within the current window
+</ResponseField>
+
+<ResponseField name="_max_requests" type="int">
+  Maximum requests allowed per window
+</ResponseField>
+
+<ResponseField name="_window_seconds" type="float">
+  Time window in seconds
+</ResponseField>
+
+## Methods
+
+### acquire_token()
+
+Acquire a token to make a request, waiting if necessary to respect rate limits.
+
+```python
+async def acquire_token(self) -> None:
+```
+
+This method ensures that no more than `max_requests` occur within any sliding window of `window_seconds`. If the limit is reached, it calculates the exact wait time until a slot becomes available and sleeps until then.
+
+**Behavior:**
+1. Removes expired timestamps (outside the current window)
+2. Checks if rate limit has been reached
+3. If limit reached: calculates wait time until oldest timestamp exits the window
+4. If capacity available: grants token immediately
+5. Waits outside the critical section to avoid blocking other operations
+
+**Returns:**
+- None (blocks until token is available)
+
+## Algorithm: Sliding Window Log
+
+The rate limiter uses a **Sliding Window Log** algorithm:
+
+1. **Timestamp Tracking**: Every granted request is logged with its timestamp
+2. **Window Calculation**: On each `acquire_token()` call, timestamps older than `window_seconds` are removed
+3. **Capacity Check**: If remaining timestamps < `max_requests`, grant token immediately
+4. **Wait Calculation**: If at capacity, calculate exact time until oldest timestamp expires
+5. **Sleep & Retry**: Sleep for calculated duration, then retry from step 2
+
+This provides:
+- **Exact rate limiting**: Never exceeds `max_requests` per `window_seconds`
+- **Fair queuing**: FIFO token distribution
+- **Minimal wait times**: Calculates precise sleep duration
+- **Thread safety**: Uses async locks for concurrent access
+
+## Usage Example
+
+### Basic Usage
+
+```python
+import asyncio
+from src.RateLimiter import RateLimiter
+
+async def make_api_call(rate_limiter: RateLimiter, item_name: str):
+    # Acquire token before making request
+    await rate_limiter.acquire_token()
+    
+    # Make API call (token granted, safe to proceed)
+    print(f"Fetching {item_name}...")
+    # ... actual API call ...
+
+async def main():
+    # Create rate limiter: 15 requests per 60 seconds
+    limiter = RateLimiter(max_requests=15, window_seconds=60.0)
+    
+    # Make multiple API calls
+    tasks = [
+        make_api_call(limiter, f"Item {i}")
+        for i in range(20)  # More than rate limit
+    ]
+    
+    await asyncio.gather(*tasks)
+    # First 15 execute immediately
+    # Remaining 5 wait until slots become available
+
+asyncio.run(main())
+```
+
+### Shared Rate Limiter
+
+```python
+from src.RateLimiter import RateLimiter
+from src.steamAPIclient import SteamAPIClient
+from src.snoozerScheduler import snoozerScheduler
+from src.clockworkScheduler import ClockworkScheduler
+
+# Create single shared rate limiter
+shared_limiter = RateLimiter(max_requests=100, window_seconds=60.0)
+
+# Pass to all clients/schedulers
+client = SteamAPIClient(rate_limiter=shared_limiter)
+snoozer = snoozerScheduler(
+    live_items=items,
+    rate_limiter=shared_limiter
+)
+clockwork = ClockworkScheduler(
+    items=history_items,
+    rate_limiter=shared_limiter
+)
+
+# All components now respect the same rate limit
+```
+
+## Thread Safety
+
+The `RateLimiter` is fully thread-safe and async-safe:
+
+- Uses `asyncio.Lock` to protect critical sections
+- Multiple coroutines can safely call `acquire_token()` concurrently
+- Token grants are atomic and FIFO-ordered
+- Safe to share across multiple schedulers, clients, and tasks
+
+## Performance Characteristics
+
+<ResponseField name="Time Complexity" type="O(n)">
+  Where n = number of timestamps in current window (≤ max_requests)
+</ResponseField>
+
+<ResponseField name="Space Complexity" type="O(max_requests)">
+  Stores at most `max_requests` timestamps
+</ResponseField>
+
+<ResponseField name="Wait Precision" type="Exact">
+  Calculates exact wait time based on oldest timestamp
+</ResponseField>
+
+## Best Practices
+
+1. **Share Rate Limiter Instances**: Use a single shared instance across all API clients to enforce global rate limits
+
+2. **Configure Conservatively**: Set `max_requests` slightly below Steam's actual limit to account for request processing time
+
+3. **Match Steam's Window**: Steam typically uses 60-second windows, so use `window_seconds=60.0`
+
+4. **Always Acquire Before Requests**: Call `await rate_limiter.acquire_token()` immediately before making API calls
+
+5. **Don't Catch Blocking**: Let `acquire_token()` block naturally - it's designed to wait safely

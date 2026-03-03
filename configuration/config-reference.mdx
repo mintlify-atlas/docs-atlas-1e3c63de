@@ -1,0 +1,393 @@
+---
+title: 'Configuration Reference'
+description: 'Complete config.yaml parameter reference'
+icon: 'book'
+---
+
+## Configuration File Format
+
+Hridaya uses YAML format for configuration. The file must be named `config.yaml` and placed in the project root directory.
+
+## LIMITS Section
+
+Defines rate limiting parameters for Steam API compliance.
+
+### Structure
+
+```yaml
+LIMITS:
+  REQUESTS: 15
+  WINDOW_SECONDS: 60
+```
+
+### Parameters
+
+<ParamField path="LIMITS.REQUESTS" type="integer" required>
+  Maximum number of API requests allowed within the time window.
+  
+  **Recommended**: Start with 15-20 requests per minute. Steam's actual limits are not publicly documented, so conservative values are safer.
+  
+  **Validation**: Must be positive integer greater than 0.
+</ParamField>
+
+<ParamField path="LIMITS.WINDOW_SECONDS" type="integer" required>
+  Duration of the rate limiting window in seconds.
+  
+  **Default**: 60 seconds (1 minute)
+  
+  **Common values**: 
+  - `60` - Per-minute limiting
+  - `300` - Per-5-minute limiting
+  - `3600` - Per-hour limiting
+  
+  **Validation**: Must be positive integer greater than 0.
+</ParamField>
+
+## TRACKING_ITEMS Section
+
+Defines the list of Steam Community Market items to track.
+
+### Structure
+
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 30
+    apiid: 'priceoverview'
+    item_nameid: 176582392  # Required for some endpoints
+```
+
+### Universal Required Parameters
+
+These parameters are required for **all** tracked items regardless of endpoint:
+
+<ParamField path="market_hash_name" type="string" required>
+  Exact Steam Community Market item name. Must match Steam's market listing exactly, including special characters and capitalization.
+  
+  **Examples**:
+  - `"AK-47 | Redline (Field-Tested)"`
+  - `"Revolution Case"`
+  - `"AWP | Neo-Noir (Factory New)"`
+  - `"Sticker | Team Liquid | Paris 2023"`
+  
+  **Finding the name**:
+  1. Navigate to the item's Steam market page
+  2. The name appears in the page title and URL (URL-encoded)
+  3. Copy exactly as displayed
+  
+  <Warning>
+    Wear conditions (Factory New, Minimal Wear, etc.) and StatTrak™ prefixes must be included exactly.
+  </Warning>
+</ParamField>
+
+<ParamField path="appid" type="integer" required>
+  Steam Application ID identifying which game/app this item belongs to.
+  
+  **Popular App IDs**:
+  
+  | App ID | Game/Application |
+  |--------|------------------|
+  | `730` | Counter-Strike 2 (CS2) |
+  | `570` | Dota 2 |
+  | `440` | Team Fortress 2 |
+  | `252490` | Rust |
+  | `753` | Steam (trading cards, backgrounds, emoticons) |
+  | `433850` | Blackwake |
+  | `578080` | PUBG |
+  
+  **Finding App IDs**:
+  - Check the item's market URL: `steamcommunity.com/market/listings/{appid}/{item_name}`
+  - Visit [SteamDB](https://steamdb.info/) and search for the game
+</ParamField>
+
+<ParamField path="apiid" type="string" required>
+  Identifies which Steam API endpoint to use for this item.
+  
+  **Valid values**:
+  - `priceoverview` - Current prices and 24h volume
+  - `itemordershistogram` - Full order book (buy/sell orders)
+  - `itemordersactivity` - Recent trade activity feed
+  - `pricehistory` - Historical hourly price data
+  
+  **Validation**: Must be exactly one of the four values above. See [API Endpoints](/configuration/api-endpoints) for detailed comparison.
+  
+  <Tip>
+    Choose the endpoint based on your use case:
+    - Day trading: `itemordersactivity`
+    - Price analysis: `priceoverview`
+    - Market depth: `itemordershistogram`
+    - Historical trends: `pricehistory`
+  </Tip>
+</ParamField>
+
+<ParamField path="polling-interval-in-seconds" type="integer" required>
+  How frequently to fetch data for this item, in seconds.
+  
+  **Minimum recommended**: 8 seconds (for high-frequency trading)
+  
+  **Common values**:
+  - `8` - Very high frequency (volatile items)
+  - `30` - Medium frequency (active items)
+  - `60` - Standard frequency (regular monitoring)
+  - `300` - Low frequency (5 minutes)
+  - `3600` - Hourly (historical data, `pricehistory` endpoint)
+  
+  **Validation**: Must be positive integer. Lower values consume more rate limit capacity.
+  
+  <Warning>
+    Total request load across all items must not exceed your `LIMITS.REQUESTS` per `LIMITS.WINDOW_SECONDS`. The system validates this at startup.
+  </Warning>
+</ParamField>
+
+### Endpoint-Specific Required Parameters
+
+<ParamField path="item_nameid" type="integer">
+  Steam's internal numeric item identifier.
+  
+  **Required for**:
+  - `itemordershistogram`
+  - `itemordersactivity`
+  
+  **Not required for**:
+  - `priceoverview`
+  - `pricehistory`
+  
+  **Finding item_nameid**:
+  1. Open the item's market page in your browser
+  2. Open browser developer tools (F12)
+  3. Go to Network tab
+  4. Refresh the page
+  5. Look for requests to `itemordershistogram` or similar
+  6. The `item_nameid` parameter appears in the request URL
+  
+  **Example**: For "AK-47 | Redline (Field-Tested)", the `item_nameid` might be `176582392`
+  
+  <Tip>
+    The `item_nameid` is stable for each item - you only need to find it once.
+  </Tip>
+</ParamField>
+
+### Optional Parameters
+
+These parameters have sensible defaults but can be customized:
+
+<ParamField path="currency" type="integer" default="1">
+  Steam currency code for price data.
+  
+  **Common currency codes**:
+  
+  | Code | Currency |
+  |------|----------|
+  | `1` | USD (US Dollar) |
+  | `2` | GBP (British Pound) |
+  | `3` | EUR (Euro) |
+  | `5` | RUB (Russian Ruble) |
+  | `6` | BRL (Brazilian Real) |
+  | `9` | NOK (Norwegian Krone) |
+  | `10` | IDR (Indonesian Rupiah) |
+  | `11` | MYR (Malaysian Ringgit) |
+  | `12` | PHP (Philippine Peso) |
+  | `13` | SGD (Singapore Dollar) |
+  | `14` | THB (Thai Baht) |
+  | `15` | VND (Vietnamese Dong) |
+  | `16` | KRW (Korean Won) |
+  | `17` | TRY (Turkish Lira) |
+  | `18` | UAH (Ukrainian Hryvnia) |
+  | `19` | MXN (Mexican Peso) |
+  | `20` | CAD (Canadian Dollar) |
+  | `21` | AUD (Australian Dollar) |
+  | `22` | NZD (New Zealand Dollar) |
+  | `23` | CNY (Chinese Yuan) |
+  | `24` | INR (Indian Rupee) |
+  | `25` | CLP (Chilean Peso) |
+  | `26` | PEN (Peruvian Sol) |
+  | `27` | COP (Colombian Peso) |
+  | `28` | ZAR (South African Rand) |
+  | `29` | HKD (Hong Kong Dollar) |
+  | `30` | TWD (Taiwan Dollar) |
+  | `31` | SAR (Saudi Riyal) |
+  | `32` | AED (UAE Dirham) |
+  
+  <Tip>
+    Prices are returned in the selected currency. For cross-currency analysis, track the same item with different currency codes.
+  </Tip>
+</ParamField>
+
+<ParamField path="country" type="string" default="US">
+  Two-letter ISO country code for region-specific pricing.
+  
+  **Common values**:
+  - `US` - United States
+  - `GB` - United Kingdom  
+  - `DE` - Germany
+  - `FR` - France
+  - `CN` - China
+  - `IN` - India
+  - `BR` - Brazil
+  - `RU` - Russia
+  
+  **Format**: Must be 2-character uppercase ISO 3166-1 alpha-2 code
+</ParamField>
+
+<ParamField path="language" type="string" default="english">
+  Language for API response text fields.
+  
+  **Common values**:
+  - `english`
+  - `spanish`
+  - `french`
+  - `german`
+  - `italian`
+  - `portuguese`
+  - `russian`
+  - `chinese`
+  - `japanese`
+  - `korean`
+  
+  **Note**: Primarily affects activity descriptions in `itemordersactivity` endpoint. Price data is numeric and unaffected.
+</ParamField>
+
+## Complete Example
+
+```yaml
+# config.yaml - Complete example configuration
+
+LIMITS:
+  REQUESTS: 15
+  WINDOW_SECONDS: 60
+
+TRACKING_ITEMS:
+  # High-frequency trading: Track order activity every 8 seconds
+  - market_hash_name: "Revolution Case"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 8
+    apiid: 'itemordersactivity'
+    item_nameid: 175995756
+
+  # Historical analysis: Fetch price history hourly
+  - market_hash_name: "AWP | Neo-Noir (Factory New)"
+    appid: 730
+    currency: 3  # EUR
+    country: 'DE'
+    language: 'german'
+    polling-interval-in-seconds: 3600  # 1 hour
+    apiid: 'pricehistory'
+
+  # Order book monitoring: Check depth every 30 seconds
+  - market_hash_name: "Dreams & Nightmares Case"
+    appid: 730
+    currency: 2  # GBP
+    country: 'GB'
+    language: 'english'
+    polling-interval-in-seconds: 30
+    apiid: 'itemordershistogram'
+    item_nameid: 175985258
+
+  # Simple price tracking: Monitor current prices every minute
+  - market_hash_name: "MP9 | Starlight Protector (Field-Tested)"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 60
+    apiid: 'priceoverview'
+```
+
+## Validation Error Examples
+
+### Missing Required Field
+
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Revolution Case"
+    appid: 730
+    # Missing: apiid, polling-interval-in-seconds
+```
+
+**Error Output**:
+```
+❌ CONFIG ERROR: Item 1 missing required field 'apiid'
+   Item: {'market_hash_name': 'Revolution Case', 'appid': 730}
+```
+
+### Invalid apiid
+
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Revolution Case"
+    apiid: 'invalid_endpoint'  # Wrong!
+```
+
+**Error Output**:
+```
+❌ CONFIG ERROR: Item 1 has invalid apiid 'invalid_endpoint'
+   Valid options: priceoverview, itemordershistogram, itemordersactivity, pricehistory
+```
+
+### Missing Endpoint-Specific Field
+
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Revolution Case"
+    apiid: 'itemordershistogram'
+    # Missing: item_nameid (required for this endpoint)
+```
+
+**Error Output**:
+```
+❌ CONFIG ERROR: Item 1 missing 'item_nameid' (required for itemordershistogram)
+   Item: Revolution Case
+```
+
+### Infeasible Rate Limit Configuration
+
+```yaml
+LIMITS:
+  REQUESTS: 5  # Too low!
+  WINDOW_SECONDS: 60
+
+TRACKING_ITEMS:
+  - polling-interval-in-seconds: 8  # 7.5 req/window
+  - polling-interval-in-seconds: 8  # 7.5 req/window
+  # Total: 15 req/60s, but limit is only 5!
+```
+
+**Error Output**:
+```
+❌ CONFIG ERROR: Infeasible configuration
+   Calculated: 15 requests per 60s
+   Limit: 5 requests per 60s
+   Adjust polling intervals or reduce tracked items
+```
+
+## Validation Rules Summary
+
+The system validates configurations using these rules (from `cerebro.py:validate_required_fields` and `cerebro.py:validate_config_feasibility`):
+
+1. **Required field check**: All universal required fields must be present
+2. **apiid validation**: Must be one of the four valid endpoint identifiers
+3. **Endpoint-specific check**: `item_nameid` required for histogram/activity endpoints
+4. **Feasibility check**: Total request load must not exceed rate limits
+5. **Type validation**: Fields must have correct types (integers, strings)
+
+<Warning>
+  The system performs **fail-fast validation** - it exits immediately on the first error with a descriptive message. Fix errors one at a time and restart.
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Endpoints" icon="plug" href="/configuration/api-endpoints">
+    Understand the four Steam API endpoints
+  </Card>
+  <Card title="Authentication" icon="lock" href="/configuration/authentication">
+    Setup cookies for pricehistory endpoint
+  </Card>
+</CardGroup>

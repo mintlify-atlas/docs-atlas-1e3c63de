@@ -1,80 +1,553 @@
 ---
-title: "Quickstart"
-description: "Start building awesome documentation in minutes"
+title: Quickstart
+description: Get Hridaya running in under 5 minutes
 ---
 
-## Get started in three steps
+## Get up and running quickly
 
-Get your documentation site running locally and make your first customization.
+This guide will have you collecting Steam Market data in under 5 minutes.
 
-### Step 1: Set up your local environment
+<Steps>
+  <Step title="Clone the repository">
+    ```bash
+    git clone https://github.com/yourusername/hridaya.git
+    cd hridaya
+    ```
+  </Step>
+
+  <Step title="Install dependencies">
+    Hridaya requires Python 3.10+ and uses modern async libraries:
+
+    ```bash
+    pip install -r requirements.txt
+    ```
+
+    <Tip>
+    Consider using a virtual environment:
+    ```bash
+    python -m venv venv
+    source venv/bin/activate  # On Windows: venv\Scripts\activate
+    pip install -r requirements.txt
+    ```
+    </Tip>
+
+    <Accordion title="What gets installed?">
+      Hridaya's dependencies are minimal and focused:
+      
+      ```txt
+      aiohttp==3.13.2        # Async HTTP client for Steam API
+      aiosqlite==0.22.0      # Async SQLite database driver
+      pydantic==2.12.5       # Data validation and type safety
+      PyYAML==6.0.3          # Configuration file parsing
+      python-dotenv==1.2.1   # Environment variable management
+      asyncpg==0.31.0        # Optional: TimescaleDB support
+      ```
+    </Accordion>
+  </Step>
+
+  <Step title="Configure your tracking items">
+    Edit `config.yaml` to specify which items to track:
+
+    ```yaml config.yaml
+    # Rate limit settings (Steam enforces 15 req/min globally)
+    LIMITS:
+      REQUESTS: 15
+      WINDOW_SECONDS: 60
+
+    # Items to track
+    TRACKING_ITEMS:
+      - market_hash_name: "Revolution Case"
+        appid: 730  # CS2
+        currency: 1  # USD
+        country: 'US'
+        language: 'english'
+        polling-interval-in-seconds: 8
+        apiid: 'itemordersactivity'  # Real-time trade activity
+      
+      - market_hash_name: "AWP | Neo-Noir (Factory New)"
+        appid: 730
+        currency: 3  # EUR
+        country: 'IN'
+        language: 'english'
+        polling-interval-in-seconds: 60
+        apiid: 'pricehistory'  # Historical price data
+      
+      - market_hash_name: "Dreams & Nightmares Case"
+        appid: 730
+        currency: 2  # GBP
+        country: 'IN'
+        language: 'english'
+        polling-interval-in-seconds: 30
+        apiid: 'itemordershistogram'  # Order book snapshots
+    ```
+
+    <Note>
+    **Configuration validation happens automatically on startup**. Hridaya will:
+    - Verify all required fields are present
+    - Check that your polling intervals are feasible within rate limits
+    - Auto-populate `item_nameid` for CS2 items (required for histogram/activity endpoints)
+    </Note>
+
+    <Accordion title="Understanding polling intervals">
+      The `polling-interval-in-seconds` determines how often each item is polled.
+      
+      Hridaya validates that your configuration is feasible:
+      
+      ```python
+      # Example calculation for 60-second window:
+      # Item 1: 60s window / 8s interval = 7.5 requests
+      # Item 2: 60s window / 60s interval = 1 request
+      # Item 3: 60s window / 30s interval = 2 requests
+      # Total: 10.5 requests per 60s (well under 15 limit)
+      ```
+      
+      If your config exceeds rate limits, you'll see:
+      ```
+      ❌ CONFIG ERROR: Infeasible configuration
+         Calculated: 18 requests per 60s
+         Limit: 15 requests per 60s
+         Adjust polling intervals or reduce tracked items
+      ```
+    </Accordion>
+  </Step>
+
+  <Step title="(Optional) Configure price history access">
+    The `pricehistory` endpoint requires Steam session cookies. Create a `.env` file:
+
+    ```bash .env
+    sessionid=your_session_id_here
+    steamLoginSecure=your_steam_login_secure_here
+    ```
+
+    <Accordion title="How to get Steam session cookies">
+      <Steps>
+        <Step title="Open Steam Community in your browser">
+          Navigate to https://steamcommunity.com/market/ while logged in
+        </Step>
+        <Step title="Open browser developer tools">
+          Press F12 or right-click → Inspect
+        </Step>
+        <Step title="Go to Application/Storage tab">
+          Find Cookies → https://steamcommunity.com
+        </Step>
+        <Step title="Copy the cookie values">
+          - `sessionid`: Session identifier
+          - `steamLoginSecure`: Encrypted login token
+        </Step>
+      </Steps>
+
+      <Warning>
+      **Never commit `.env` to version control**. It's already in `.gitignore`, but always verify before pushing.
+      </Warning>
+    </Accordion>
+
+    <Note>
+    If you don't configure cookies, `pricehistory` endpoints will fail silently. Other endpoints work without authentication.
+    </Note>
+  </Step>
+
+  <Step title="Launch Hridaya">
+    Start the data collection engine:
+
+    ```bash
+    python cerebro.py
+    ```
+
+    You'll see startup output like this:
+
+    ```
+    hello world!
+      I see you have a rate limit: 15 requests per 60 seconds
+      ✓ Config feasible: 10 req/60s (66.7% capacity)
+      ⚠ Startup: 3 items will fire initially (rate limiter will queue them)
+
+      ✓ Shared RateLimiter created (15 req/60s)
+      ✓ Database: SQLite at data/market_data.db
+      ✓ Started HIGH frequency tracking on (2 items)
+      ✓ Started ARCHIVAL work + all known historical snapshots available right now on (1 items)
+
+    GO TIME!
+
+    Press Ctrl+C to stop
+    ============================================================
+    ```
+
+    <Tip>
+    The orchestrator automatically creates the SQLite database at `data/market_data.db` on first run.
+    </Tip>
+  </Step>
+
+  <Step title="Verify data collection">
+    Open the SQLite database to see collected data:
+
+    ```bash
+    sqlite3 data/market_data.db
+    ```
+
+    ```sql
+    -- View latest price overview data
+    SELECT * FROM price_overview ORDER BY timestamp DESC LIMIT 5;
+
+    -- View order book snapshots
+    SELECT market_hash_name, timestamp, highest_buy_order, lowest_sell_order 
+    FROM orders_histogram 
+    ORDER BY timestamp DESC 
+    LIMIT 5;
+
+    -- View recent trade activity
+    SELECT market_hash_name, timestamp, activity_count 
+    FROM orders_activity 
+    ORDER BY timestamp DESC 
+    LIMIT 5;
+
+    -- View historical price data
+    SELECT market_hash_name, time, price, volume 
+    FROM price_history 
+    ORDER BY time DESC 
+    LIMIT 10;
+    ```
+
+    <Accordion title="Database schema overview">
+      Hridaya creates four main tables:
+
+      **price_overview** - Current market prices
+      ```sql
+      CREATE TABLE price_overview (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+          appid INTEGER NOT NULL,
+          market_hash_name TEXT NOT NULL,
+          currency TEXT NOT NULL,
+          lowest_price REAL,
+          median_price REAL,
+          volume INTEGER
+      );
+      ```
+
+      **orders_histogram** - Order book snapshots
+      ```sql
+      CREATE TABLE orders_histogram (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+          appid INTEGER NOT NULL,
+          market_hash_name TEXT NOT NULL,
+          item_nameid INTEGER NOT NULL,
+          buy_order_table TEXT,      -- JSON array of buy orders
+          sell_order_table TEXT,     -- JSON array of sell orders
+          highest_buy_order REAL,
+          lowest_sell_order REAL
+      );
+      ```
+
+      **orders_activity** - Trade activity log
+      ```sql
+      CREATE TABLE orders_activity (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+          appid INTEGER NOT NULL,
+          market_hash_name TEXT NOT NULL,
+          item_nameid INTEGER NOT NULL,
+          parsed_activities TEXT,    -- JSON array of parsed trades
+          activity_count INTEGER,
+          steam_timestamp INTEGER NOT NULL
+      );
+      ```
+
+      **price_history** - Historical time-series
+      ```sql
+      CREATE TABLE price_history (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          time DATETIME NOT NULL,
+          appid INTEGER NOT NULL,
+          market_hash_name TEXT NOT NULL,
+          price REAL NOT NULL,
+          volume INTEGER NOT NULL,
+          fetched_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+          UNIQUE(market_hash_name, time)
+      );
+      ```
+    </Accordion>
+  </Step>
+</Steps>
+
+## What happens on startup
 
 <AccordionGroup>
-  <Accordion icon="copy" title="Clone your docs locally">
-    During the onboarding process, you created a GitHub repository with your docs content if you didn't already have one. You can find a link to this repository in your [dashboard](https://dashboard.mintlify.com).
-    
-    To clone the repository locally so that you can make and preview changes to your docs, follow the [Cloning a repository](https://docs.github.com/en/repositories/creating-and-managing-repositories/cloning-a-repository) guide in the GitHub docs.
+  <Accordion title="Configuration loading and validation">
+    The Orchestrator reads `config.yaml` and performs several checks:
+
+    ```python cerebro.py:43-58
+    def load_and_validate_config(self):
+        """Load config and validate feasibility."""
+        print("hello world!")
+        self.config = load_config_from_yaml(self.config_path)
+
+        # Extract config values
+        rate_limit = self.config['LIMITS']['REQUESTS']
+        window_seconds = self.config['LIMITS']['WINDOW_SECONDS']
+        tracking_items = self.config['TRACKING_ITEMS']
+
+        print(f"  I see you have a rate limit: {rate_limit} requests per {window_seconds} seconds")
+
+        # Validate required fields exist before checking feasibility
+        self.validate_required_fields(tracking_items)
+
+        self.validate_config_feasibility(rate_limit, window_seconds, tracking_items)
+    ```
+
+    Common validation errors:
+    - Missing required fields (`market_hash_name`, `apiid`, `polling-interval-in-seconds`, `appid`)
+    - Invalid `apiid` (must be one of: `priceoverview`, `itemordershistogram`, `itemordersactivity`, `pricehistory`)
+    - Missing `item_nameid` for histogram/activity endpoints
+    - Infeasible rate limits (total requests exceed 15 per 60 seconds)
   </Accordion>
-  <Accordion icon="rectangle-terminal" title="Start the preview server">
-    1. Install the Mintlify CLI: `npm i -g mint`
-    2. Navigate to your docs directory and run: `mint dev`
-    3. Open `http://localhost:3000` to see your docs live!
-    
-    <Tip>Your preview updates automatically as you edit files.</Tip>
+
+  <Accordion title="Scheduler initialization">
+    Based on your configured items, Hridaya creates the appropriate schedulers:
+
+    ```python cerebro.py:156-179
+    # Filter items by type
+    live_items = []      # priceoverview, histogram, activity
+    history_items = []   # pricehistory
+
+    for item in self.config['TRACKING_ITEMS']:
+        if item['apiid'] == 'pricehistory':
+            history_items.append(item)
+        else:
+            live_items.append(item)
+
+    # Create schedulers with shared rate limiter
+    if live_items:
+        self.snoozerScheduler = snoozerScheduler(
+            live_items=live_items,
+            rate_limiter=self.rate_limiter
+        )
+
+    if history_items:
+        self.clockworkScheduler = ClockworkScheduler(
+            items=history_items,
+            rate_limiter=self.rate_limiter
+        )
+    ```
+
+    **Critical**: All schedulers share a single `RateLimiter` instance to enforce global rate limits.
+  </Accordion>
+
+  <Accordion title="Database setup">
+    SQLite database is automatically created with optimized settings:
+
+    ```python SQLinserts.py:98-115
+    async def _initialize_sqlite(self):
+        """Create SQLite connection and tables for operational data."""
+        self.sqlite_conn = await aiosqlite.connect(self.sqlite_path)
+
+        # Performance optimizations for SQLite
+        await self.sqlite_conn.execute("PRAGMA journal_mode=WAL")  # Write-Ahead Logging
+        await self.sqlite_conn.execute("PRAGMA synchronous=NORMAL")  # Balance safety vs speed
+        await self.sqlite_conn.execute("PRAGMA cache_size=-64000")  # 64MB cache
+        await self.sqlite_conn.execute("PRAGMA temp_store=MEMORY")  # Store temp tables in RAM
+        await self.sqlite_conn.execute("PRAGMA mmap_size=268435456")  # 256MB memory-mapped I/O
+        await self.sqlite_conn.execute("PRAGMA page_size=4096")  # Optimal page size
+
+        # Create tables
+        await self._create_sqlite_tables()
+    ```
+
+    These optimizations enable high-concurrency writes from multiple schedulers.
+  </Accordion>
+
+  <Accordion title="Graceful shutdown handling">
+    Hridaya handles shutdown signals (Ctrl+C or SIGTERM) gracefully:
+
+    ```python cerebro.py:181-189
+    def setup_signal_handlers(self):
+        """Setup signal handlers for graceful shutdown."""
+        loop = asyncio.get_event_loop()
+
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(
+                sig,
+                lambda: asyncio.create_task(self.shutdown())
+            )
+    ```
+
+    When you press Ctrl+C:
+    1. All in-flight API requests complete
+    2. Database connections close cleanly
+    3. No data is lost mid-write
   </Accordion>
 </AccordionGroup>
 
-### Step 2: Deploy your changes
+## Common configurations
+
+<CodeGroup>
+
+```yaml Minimal - Single item tracking
+LIMITS:
+  REQUESTS: 15
+  WINDOW_SECONDS: 60
+
+TRACKING_ITEMS:
+  - market_hash_name: "Revolution Case"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 30
+    apiid: 'priceoverview'
+```
+
+```yaml Aggressive - Maximum capacity usage
+LIMITS:
+  REQUESTS: 15
+  WINDOW_SECONDS: 60
+
+TRACKING_ITEMS:
+  # 5 items at 12s intervals = 5 * (60/12) = 25 requests
+  # But rate limiter ensures we never exceed 15 req/60s
+  - market_hash_name: "Revolution Case"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 12
+    apiid: 'itemordersactivity'
+  
+  - market_hash_name: "Dreams & Nightmares Case"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 12
+    apiid: 'itemordershistogram'
+  
+  - market_hash_name: "CS2 Case"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 12
+    apiid: 'priceoverview'
+```
+
+```yaml Multi-game - CS2 + Dota 2
+LIMITS:
+  REQUESTS: 15
+  WINDOW_SECONDS: 60
+
+TRACKING_ITEMS:
+  # CS2 items
+  - market_hash_name: "Revolution Case"
+    appid: 730  # CS2
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 20
+    apiid: 'itemordersactivity'
+  
+  # Dota 2 items
+  - market_hash_name: "Arcana Bundle"
+    appid: 570  # Dota 2
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 30
+    apiid: 'priceoverview'
+```
+
+</CodeGroup>
+
+## Troubleshooting
 
 <AccordionGroup>
-  <Accordion icon="github" title="Install our GitHub app">
-    Install the Mintlify GitHub app from your [dashboard](https://dashboard.mintlify.com/settings/organization/github-app).
-    
-    Our GitHub app automatically deploys your changes to your docs site, so you don't need to manage deployments yourself.
-</Accordion>
-<Accordion icon="palette" title="Update your site name and colors">
-    For a first change, let's update the name and colors of your docs site.
+  <Accordion title="Error: item_nameid not found">
+    ```
+    ✗ DISCARDING 'Revolution Case' - item_nameid not found (required for itemordershistogram)
+    ```
 
-    1. Open `docs.json` in your editor.
-    2. Change the `"name"` field to your project name.
-    3. Update the `"colors"` to match your brand.
-    4. Save and see your changes instantly at `http://localhost:3000`.
+    **Cause**: The `itemordershistogram` and `itemordersactivity` endpoints require an `item_nameid` field. Hridaya auto-populates this for CS2 items but may not find all items.
 
-    <Tip>Try changing the primary color to see an immediate difference!</Tip>
+    **Solution**:
+    1. Manually add the `item_nameid` to your config:
+    ```yaml
+    - market_hash_name: "Revolution Case"
+      appid: 730
+      item_nameid: 176042118  # Add this manually
+      apiid: 'itemordershistogram'
+    ```
+
+    2. Or switch to `priceoverview` which doesn't require `item_nameid`:
+    ```yaml
+    - market_hash_name: "Revolution Case"
+      appid: 730
+      apiid: 'priceoverview'  # No item_nameid needed
+    ```
+  </Accordion>
+
+  <Accordion title="Error: Infeasible configuration">
+    ```
+    ❌ CONFIG ERROR: Infeasible configuration
+       Calculated: 18 requests per 60s
+       Limit: 15 requests per 60s
+    ```
+
+    **Cause**: Your polling intervals are too aggressive for the rate limit.
+
+    **Solution**: Increase polling intervals or remove items:
+    ```yaml
+    # Before: 60/5 + 60/5 + 60/5 + 60/5 = 48 requests (infeasible)
+    # After: 60/15 + 60/15 + 60/15 + 60/15 = 16 requests (feasible)
+    polling-interval-in-seconds: 15  # Increase from 5
+    ```
+  </Accordion>
+
+  <Accordion title="pricehistory returns empty data">
+    **Cause**: Missing or invalid Steam session cookies.
+
+    **Solution**: Verify your `.env` file contains valid cookies:
+    ```bash
+    # .env
+    sessionid=YOUR_ACTUAL_SESSION_ID
+    steamLoginSecure=YOUR_ACTUAL_TOKEN
+    ```
+
+    Cookies expire periodically - re-fetch them from your browser if data stops flowing.
+  </Accordion>
+
+  <Accordion title="Database locked errors">
+    ```
+    sqlite3.OperationalError: database is locked
+    ```
+
+    **Cause**: Multiple processes trying to write to the same SQLite database.
+
+    **Solution**: Hridaya handles this automatically with:
+    ```python
+    PRAGMA busy_timeout=30000  # Wait up to 30s for locks
+    PRAGMA journal_mode=WAL     # Enable concurrent reads/writes
+    ```
+
+    If you see this error, ensure:
+    1. Only one Hridaya instance is running
+    2. No other tools have the database open in exclusive mode
   </Accordion>
 </AccordionGroup>
-
-### Step 3: Go live
-
-<Accordion icon="rocket" title="Publish your docs">
-  1. Commit and push your changes.
-  2. Your docs will update and be live in moments!
-</Accordion>
 
 ## Next steps
 
-Now that you have your docs running, explore these key features:
-
 <CardGroup cols={2}>
-
-<Card title="Write Content" icon="pen-to-square" href="/essentials/markdown">
-  Learn MDX syntax and start writing your documentation.
-</Card>
-
-<Card title="Customize style" icon="palette" href="/essentials/settings">
-  Make your docs match your brand perfectly.
-</Card>
-
-<Card title="Add code examples" icon="square-code" href="/essentials/code">
-  Include syntax-highlighted code blocks.
-</Card>
-
-<Card title="API documentation" icon="code" href="/api-reference/introduction">
-  Auto-generate API docs from OpenAPI specs.
-</Card>
-
+  <Card
+    title="Installation guide"
+    icon="book"
+    href="/installation"
+  >
+    Learn about advanced configuration options and TimescaleDB setup
+  </Card>
+  <Card
+    title="Architecture deep dive"
+    icon="diagram-project"
+    href="/architecture/overview"
+  >
+    Understand how Hridaya's components work together
+  </Card>
 </CardGroup>
-
-<Note>
-  **Need help?** See our [full documentation](https://mintlify.com/docs) or join our [community](https://mintlify.com/community).
-</Note>

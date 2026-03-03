@@ -1,0 +1,444 @@
+---
+title: "SteamAPIClient"
+description: "Async client for Steam Market API with rate limiting"
+---
+
+## Overview
+
+The `SteamAPIClient` class provides an async interface to Steam's Market API endpoints. It includes built-in rate limiting, session management, and automatic response parsing into Pydantic models.
+
+## Class Definition
+
+```python
+from src.steamAPIclient import SteamAPIClient
+
+client = SteamAPIClient(rate_limiter=rate_limiter)
+```
+
+### Constructor
+
+<ParamField path="rate_limiter" type="RateLimiter | None" default="None">
+  Optional shared RateLimiter instance. If None, creates its own. When using orchestrator, a shared instance should be passed.
+</ParamField>
+
+## Attributes
+
+<ResponseField name="BASE_URL" type="str">
+  Base URL for Steam Market API: `https://steamcommunity.com/market/`
+</ResponseField>
+
+<ResponseField name="rate_limiter" type="RateLimiter">
+  Rate limiter instance for API call throttling
+</ResponseField>
+
+<ResponseField name="session" type="aiohttp.ClientSession">
+  HTTP session with 30-second timeout
+</ResponseField>
+
+## Context Manager
+
+The client supports async context manager protocol for automatic session cleanup:
+
+```python
+async with SteamAPIClient(rate_limiter=limiter) as client:
+    result = await client.fetch_price_overview(
+        appid=730,
+        market_hash_name="AK-47 | Redline (Field-Tested)"
+    )
+# Session automatically closed
+```
+
+### close()
+
+Manually close the aiohttp session.
+
+```python
+async def close(self):
+```
+
+Call this when done with the client if not using context manager.
+
+## API Methods
+
+### fetch_price_overview()
+
+Fetch current price overview for a specific item.
+
+```python
+async def fetch_price_overview(
+    self,
+    appid: int,
+    market_hash_name: str,
+    currency: int = 1,
+    country: str = "US",
+    language: str = "english"
+) -> PriceOverviewData:
+```
+
+<ParamField path="appid" type="int" required>
+  Steam application ID (e.g., 730 for CS2, 570 for Dota 2)
+</ParamField>
+
+<ParamField path="market_hash_name" type="str" required>
+  URL-encoded market hash name of the item
+</ParamField>
+
+<ParamField path="currency" type="int" default={1}>
+  Currency code (1=USD, 3=EUR, 6=RUB, etc.)
+</ParamField>
+
+<ParamField path="country" type="str" default="US">
+  Country code
+</ParamField>
+
+<ParamField path="language" type="str" default="english">
+  Response language
+</ParamField>
+
+**Returns:**
+
+<ResponseField name="PriceOverviewData" type="object">
+  Parsed response with current pricing data
+  
+  <ResponseField name="success" type="bool">
+    Whether the API call succeeded
+  </ResponseField>
+  
+  <ResponseField name="lowest_price" type="str | None">
+    Current lowest listing price (formatted string)
+  </ResponseField>
+  
+  <ResponseField name="median_price" type="str | None">
+    Recent median sale price (formatted string)
+  </ResponseField>
+  
+  <ResponseField name="volume" type="str | None">
+    Recent sales volume (formatted string)
+  </ResponseField>
+</ResponseField>
+
+**Example:**
+
+```python
+result = await client.fetch_price_overview(
+    appid=730,
+    market_hash_name="AK-47 | Redline (Field-Tested)",
+    currency=1  # USD
+)
+
+print(f"Lowest: {result.lowest_price}")  # "$10.50"
+print(f"Median: {result.median_price}")  # "$10.75"
+print(f"Volume: {result.volume}")        # "1,234"
+```
+
+---
+
+### fetch_orders_histogram()
+
+Fetch order book histogram (buy/sell orders) for a specific item.
+
+```python
+async def fetch_orders_histogram(
+    self, 
+    appid: int, 
+    item_nameid: int, 
+    currency: int, 
+    country: str = "US", 
+    language: str = "english"
+) -> OrdersHistogramData:
+```
+
+<ParamField path="appid" type="int" required>
+  Steam application ID
+</ParamField>
+
+<ParamField path="item_nameid" type="int" required>
+  Numeric Steam item name ID (different from market_hash_name)
+</ParamField>
+
+<ParamField path="currency" type="int" required>
+  Currency code (1=USD, 3=EUR, etc.)
+</ParamField>
+
+<ParamField path="country" type="str" default="US">
+  Country code
+</ParamField>
+
+<ParamField path="language" type="str" default="english">
+  Response language
+</ParamField>
+
+**Returns:**
+
+<ResponseField name="OrdersHistogramData" type="object">
+  Parsed response with order book data
+  
+  <ResponseField name="success" type="int | bool">
+    Whether the API call succeeded (Steam returns 1 for true)
+  </ResponseField>
+  
+  <ResponseField name="buy_order_count" type="int | str | None">
+    Total number of buy orders
+  </ResponseField>
+  
+  <ResponseField name="buy_order_price" type="str | None">
+    Highest buy order price
+  </ResponseField>
+  
+  <ResponseField name="buy_order_table" type="List[OrderBookEntry] | None">
+    List of buy order book entries
+  </ResponseField>
+  
+  <ResponseField name="sell_order_count" type="int | str | None">
+    Total number of sell orders
+  </ResponseField>
+  
+  <ResponseField name="sell_order_price" type="str | None">
+    Lowest sell order price
+  </ResponseField>
+  
+  <ResponseField name="sell_order_table" type="List[OrderBookEntry] | None">
+    List of sell order book entries
+  </ResponseField>
+  
+  <ResponseField name="highest_buy_order" type="str | None">
+    Highest buy order price string
+  </ResponseField>
+  
+  <ResponseField name="lowest_sell_order" type="str | None">
+    Lowest sell order price string
+  </ResponseField>
+</ResponseField>
+
+**Example:**
+
+```python
+result = await client.fetch_orders_histogram(
+    appid=730,
+    item_nameid=176059193,
+    currency=1
+)
+
+print(f"Buy orders: {result.buy_order_count}")
+print(f"Sell orders: {result.sell_order_count}")
+print(f"Spread: {result.highest_buy_order} - {result.lowest_sell_order}")
+```
+
+---
+
+### fetch_orders_activity()
+
+Fetch recent trade activity for a specific item.
+
+```python
+async def fetch_orders_activity(
+    self, 
+    item_nameid: int, 
+    country: str = "US", 
+    language: str = "english",
+    currency: int = 1, 
+    two_factor: int = 0
+) -> OrdersActivityData:
+```
+
+<ParamField path="item_nameid" type="int" required>
+  Numeric Steam item name ID
+</ParamField>
+
+<ParamField path="country" type="str" default="US">
+  Country code
+</ParamField>
+
+<ParamField path="language" type="str" default="english">
+  Response language
+</ParamField>
+
+<ParamField path="currency" type="int" default={1}>
+  Currency code (1=USD, 3=EUR, etc.)
+</ParamField>
+
+<ParamField path="two_factor" type="int" default={0}>
+  Two-factor authentication flag
+</ParamField>
+
+**Returns:**
+
+<ResponseField name="OrdersActivityData" type="object">
+  Parsed response with recent trade activity
+  
+  <ResponseField name="success" type="int | bool">
+    Whether the API call succeeded
+  </ResponseField>
+  
+  <ResponseField name="activity" type="List[str]">
+    List of HTML strings containing trade activity
+  </ResponseField>
+  
+  <ResponseField name="timestamp" type="int">
+    Unix timestamp of the response
+  </ResponseField>
+  
+  <ResponseField name="parsed_activities" type="List[ActivityEntry] | None">
+    Parsed activity entries (automatically populated)
+  </ResponseField>
+</ResponseField>
+
+**Note:** This endpoint returns JSON with HTML content in the "activity" field. The HTML is automatically parsed into structured `ActivityEntry` objects and stored in `parsed_activities`.
+
+**Example:**
+
+```python
+result = await client.fetch_orders_activity(
+    item_nameid=176059193,
+    currency=1
+)
+
+for activity in result.parsed_activities:
+    print(f"{activity.timestamp}: {activity.action} at {activity.price} {activity.currency}")
+```
+
+---
+
+### fetch_price_history()
+
+Fetch complete historical price data for a specific item.
+
+```python
+async def fetch_price_history(
+    self,
+    appid: int,
+    market_hash_name: str,
+    currency: int = 1,
+    country: str = "US",
+    language: str = "english"
+) -> PriceHistoryData:
+```
+
+<ParamField path="appid" type="int" required>
+  Steam application ID
+</ParamField>
+
+<ParamField path="market_hash_name" type="str" required>
+  URL-encoded market hash name of the item
+</ParamField>
+
+<ParamField path="currency" type="int" default={1}>
+  Currency code (1=USD, 3=EUR, etc.)
+</ParamField>
+
+<ParamField path="country" type="str" default="US">
+  Country code
+</ParamField>
+
+<ParamField path="language" type="str" default="english">
+  Response language
+</ParamField>
+
+**Returns:**
+
+<ResponseField name="PriceHistoryData" type="object">
+  Parsed response with historical price data
+  
+  <ResponseField name="success" type="bool">
+    Whether the API call succeeded
+  </ResponseField>
+  
+  <ResponseField name="price_prefix" type="str">
+    Currency prefix (e.g., "$")
+  </ResponseField>
+  
+  <ResponseField name="price_suffix" type="str">
+    Currency suffix (e.g., "€")
+  </ResponseField>
+  
+  <ResponseField name="prices" type="List[List]">
+    Array of [date_string, price_float, volume_string] arrays
+  </ResponseField>
+</ResponseField>
+
+**Authentication:**
+
+This endpoint requires Steam authentication cookies. Cookies are read from environment variables on each call, supporting hot-swapping:
+
+- `sessionid`
+- `steamLoginSecure`
+- `browserid`
+- `steamCountry`
+
+**Example:**
+
+```python
+result = await client.fetch_price_history(
+    appid=730,
+    market_hash_name="AK-47 | Redline (Field-Tested)",
+    currency=1
+)
+
+for entry in result.prices:
+    date_str, price, volume = entry
+    print(f"{date_str}: ${price} (volume: {volume})")
+```
+
+## Rate Limiting
+
+All API methods automatically acquire a rate limit token before making requests:
+
+```python
+# CRITICAL: Acquire rate limit token before making request
+await self.rate_limiter.acquire_token()
+```
+
+This ensures the client never exceeds configured rate limits, even when making concurrent requests.
+
+## Error Handling
+
+All methods may raise:
+
+- `aiohttp.ClientResponseError`: HTTP errors (4xx, 5xx)
+- `aiohttp.ClientError`: Network errors (timeout, DNS, connection refused)
+- `pydantic.ValidationError`: Invalid response data structure
+
+## Complete Usage Example
+
+```python
+import asyncio
+from src.RateLimiter import RateLimiter
+from src.steamAPIclient import SteamAPIClient
+
+async def main():
+    # Create shared rate limiter
+    limiter = RateLimiter(max_requests=15, window_seconds=60.0)
+    
+    # Use context manager for automatic cleanup
+    async with SteamAPIClient(rate_limiter=limiter) as client:
+        
+        # Fetch price overview
+        overview = await client.fetch_price_overview(
+            appid=730,
+            market_hash_name="AK-47 | Redline (Field-Tested)"
+        )
+        print(f"Price: {overview.lowest_price}")
+        
+        # Fetch order book
+        histogram = await client.fetch_orders_histogram(
+            appid=730,
+            item_nameid=176059193,
+            currency=1
+        )
+        print(f"Orders: {histogram.buy_order_count} buy, {histogram.sell_order_count} sell")
+        
+        # Fetch recent activity
+        activity = await client.fetch_orders_activity(
+            item_nameid=176059193
+        )
+        print(f"Recent trades: {len(activity.parsed_activities)}")
+        
+        # Fetch price history (requires auth)
+        history = await client.fetch_price_history(
+            appid=730,
+            market_hash_name="AK-47 | Redline (Field-Tested)"
+        )
+        print(f"Historical data points: {len(history.prices)}")
+
+asyncio.run(main())
+```

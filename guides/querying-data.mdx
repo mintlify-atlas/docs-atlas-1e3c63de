@@ -1,0 +1,526 @@
+---
+title: 'Querying Data'
+description: 'SQL query examples for analyzing Steam Market data'
+icon: 'database'
+---
+
+## Overview
+
+Hridaya stores all market data in a SQLite database (`market_data.db`) with four tables, each capturing different aspects of market activity. This guide provides practical SQL queries for analyzing your data.
+
+## Database Connection
+
+### Using SQLite CLI
+
+```bash
+sqlite3 market_data.db
+```
+
+Once connected, you can run queries directly:
+
+```sql
+.tables  -- Show all tables
+.schema price_overview  -- Show table structure
+```
+
+### Using Python
+
+```python
+import sqlite3
+
+conn = sqlite3.connect('market_data.db')
+cursor = conn.cursor()
+
+cursor.execute("SELECT * FROM price_overview LIMIT 10")
+for row in cursor.fetchall():
+    print(row)
+
+conn.close()
+```
+
+## Database Schema
+
+### price_overview Table
+
+**What it stores:** Current market prices - snapshots of lowest price, median price, and 24h volume.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Auto-incrementing row ID |
+| `timestamp` | DATETIME | When snapshot was taken |
+| `appid` | INTEGER | Steam app ID (730 for CS2) |
+| `market_hash_name` | TEXT | Item name |
+| `item_nameid` | INTEGER | Steam's internal item ID |
+| `currency` | TEXT | Currency code (USD, EUR, etc.) |
+| `lowest_price` | REAL | Cheapest current listing |
+| `median_price` | REAL | Median sale price |
+| `volume` | INTEGER | Sales in last 24 hours |
+
+### orders_histogram Table
+
+**What it stores:** Order book snapshots - all buy/sell orders at each price level.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Auto-incrementing row ID |
+| `timestamp` | DATETIME | When snapshot was taken |
+| `market_hash_name` | TEXT | Item name |
+| `buy_order_table` | TEXT | JSON array of buy orders |
+| `sell_order_table` | TEXT | JSON array of sell orders |
+| `buy_order_count` | INTEGER | Total number of buy orders |
+| `sell_order_count` | INTEGER | Total number of sell orders |
+| `highest_buy_order` | REAL | Best bid price |
+| `lowest_sell_order` | REAL | Best ask price |
+
+### orders_activity Table
+
+**What it stores:** Recent trade activity - feed of purchases and new listings.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Auto-incrementing row ID |
+| `timestamp` | DATETIME | When snapshot was taken |
+| `market_hash_name` | TEXT | Item name |
+| `parsed_activities` | TEXT | JSON array of parsed activities |
+| `activity_count` | INTEGER | Number of activities |
+| `steam_timestamp` | INTEGER | Unix timestamp from Steam |
+
+### price_history Table
+
+**What it stores:** Historical hourly price and volume data.
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `id` | INTEGER | Auto-incrementing row ID |
+| `time` | DATETIME | The hour this data represents |
+| `market_hash_name` | TEXT | Item name |
+| `price` | REAL | Median price during this hour |
+| `volume` | INTEGER | Sales during this hour |
+| `fetched_at` | DATETIME | When we fetched this data |
+
+<Info>
+All timestamps are stored in UTC. Tables are indexed on `(market_hash_name, timestamp DESC)` for fast lookups.
+</Info>
+
+## Basic Queries
+
+### Get Latest Price
+
+Get the most recent price data for an item:
+
+```sql
+SELECT timestamp, lowest_price, median_price, volume
+FROM price_overview
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+ORDER BY timestamp DESC
+LIMIT 1;
+```
+
+### Get Prices from Last Hour
+
+Retrieve all price snapshots from the last hour:
+
+```sql
+SELECT timestamp, lowest_price, median_price
+FROM price_overview
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND timestamp > datetime('now', '-1 hour')
+ORDER BY timestamp DESC;
+```
+
+### Get Current Bid-Ask Spread
+
+Find the current spread between highest buy order and lowest sell order:
+
+```sql
+SELECT timestamp, 
+       highest_buy_order, 
+       lowest_sell_order,
+       (lowest_sell_order - highest_buy_order) AS spread,
+       ((lowest_sell_order - highest_buy_order) / highest_buy_order * 100) AS spread_pct
+FROM orders_histogram
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+ORDER BY timestamp DESC
+LIMIT 1;
+```
+
+## Historical Analysis
+
+### Daily Average Price (Last 30 Days)
+
+Calculate daily averages and total volume:
+
+```sql
+SELECT date(time) AS day,
+       AVG(price) AS avg_price,
+       MIN(price) AS low,
+       MAX(price) AS high,
+       SUM(volume) AS total_volume
+FROM price_history
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND time > datetime('now', '-30 days')
+GROUP BY date(time)
+ORDER BY day DESC;
+```
+
+### Hourly Price Trend for Today
+
+Get hourly price movements for the current day:
+
+```sql
+SELECT strftime('%H:00', time) AS hour, 
+       price, 
+       volume
+FROM price_history
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND date(time) = date('now')
+ORDER BY time;
+```
+
+### Find Price Spikes
+
+Identify prices that are 20% above the average:
+
+```sql
+WITH avg_price AS (
+    SELECT AVG(price) AS mean 
+    FROM price_history
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+)
+SELECT time, 
+       price, 
+       volume,
+       ((price - mean) / mean * 100) AS percent_above_avg
+FROM price_history, avg_price
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND price > mean * 1.2
+ORDER BY time DESC;
+```
+
+### Weekly Moving Average
+
+Calculate a 7-day moving average price:
+
+```sql
+SELECT date(time) AS day,
+       AVG(price) AS daily_avg,
+       AVG(AVG(price)) OVER (
+           ORDER BY date(time)
+           ROWS BETWEEN 6 PRECEDING AND CURRENT ROW
+       ) AS moving_avg_7day
+FROM price_history
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND time > datetime('now', '-60 days')
+GROUP BY date(time)
+ORDER BY day;
+```
+
+## Order Book Analysis
+
+### Get Full Order Book
+
+Retrieve the complete current order book:
+
+```sql
+SELECT timestamp, 
+       buy_order_table, 
+       sell_order_table,
+       buy_order_count,
+       sell_order_count
+FROM orders_histogram
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+ORDER BY timestamp DESC
+LIMIT 1;
+```
+
+### Track Order Book Depth Over Time
+
+See how buy/sell order counts change:
+
+```sql
+SELECT timestamp, 
+       buy_order_count, 
+       sell_order_count,
+       (sell_order_count - buy_order_count) AS imbalance
+FROM orders_histogram
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND timestamp > datetime('now', '-24 hours')
+ORDER BY timestamp;
+```
+
+### Extract Top Buy Order Price
+
+Use `json_extract()` to parse the first buy order:
+
+```sql
+SELECT timestamp,
+       json_extract(buy_order_table, '$[0].price') AS top_bid_price,
+       json_extract(buy_order_table, '$[0].quantity') AS top_bid_quantity
+FROM orders_histogram
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+ORDER BY timestamp DESC 
+LIMIT 1;
+```
+
+### Average Spread Over Time
+
+Calculate average hourly spread:
+
+```sql
+SELECT strftime('%Y-%m-%d %H:00', timestamp) AS hour,
+       AVG(lowest_sell_order - highest_buy_order) AS avg_spread
+FROM orders_histogram
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND timestamp > datetime('now', '-7 days')
+GROUP BY hour
+ORDER BY hour;
+```
+
+## Activity Analysis
+
+### Get Recent Trades
+
+View the latest trading activity:
+
+```sql
+SELECT timestamp, 
+       parsed_activities, 
+       activity_count
+FROM orders_activity
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+ORDER BY timestamp DESC
+LIMIT 10;
+```
+
+### Count Activity by Hour
+
+Aggregate activity counts by hour:
+
+```sql
+SELECT strftime('%Y-%m-%d %H:00', timestamp) AS hour,
+       SUM(activity_count) AS total_activities
+FROM orders_activity
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND timestamp > datetime('now', '-7 days')
+GROUP BY hour
+ORDER BY hour DESC;
+```
+
+## Cross-Item Comparisons
+
+### Compare Current Prices Across Items
+
+See latest prices for all tracked items:
+
+```sql
+SELECT market_hash_name,
+       MAX(timestamp) AS last_update,
+       lowest_price,
+       median_price,
+       volume
+FROM price_overview
+GROUP BY market_hash_name
+ORDER BY volume DESC;
+```
+
+### Most Volatile Items (Last 24h)
+
+Find items with the highest price volatility:
+
+```sql
+SELECT market_hash_name,
+       MIN(price) AS low,
+       MAX(price) AS high,
+       MAX(price) - MIN(price) AS range,
+       (MAX(price) - MIN(price)) / AVG(price) * 100 AS volatility_pct
+FROM price_history
+WHERE time > datetime('now', '-24 hours')
+GROUP BY market_hash_name
+ORDER BY volatility_pct DESC;
+```
+
+### Highest Volume Items
+
+Find most actively traded items in the last 24 hours:
+
+```sql
+SELECT market_hash_name,
+       SUM(volume) AS total_volume,
+       AVG(price) AS avg_price
+FROM price_history
+WHERE time > datetime('now', '-24 hours')
+GROUP BY market_hash_name
+ORDER BY total_volume DESC
+LIMIT 10;
+```
+
+### Price Correlation Between Items
+
+Compare price movements of two items:
+
+```sql
+SELECT a.time,
+       a.price AS item_a_price,
+       b.price AS item_b_price,
+       (a.price / b.price) AS price_ratio
+FROM price_history a
+JOIN price_history b ON a.time = b.time
+WHERE a.market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND b.market_hash_name = 'Dreams & Nightmares Case'
+  AND a.time > datetime('now', '-7 days')
+ORDER BY a.time;
+```
+
+## Advanced Queries
+
+### Detect Sudden Volume Spikes
+
+Find hours where volume exceeded 3x the average:
+
+```sql
+WITH avg_volume AS (
+    SELECT AVG(volume) AS mean_vol
+    FROM price_history
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+)
+SELECT time, 
+       volume,
+       price,
+       (volume / mean_vol) AS volume_ratio
+FROM price_history, avg_volume
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND volume > mean_vol * 3
+ORDER BY time DESC;
+```
+
+### Calculate Price Momentum
+
+Compare current price to 7-day average:
+
+```sql
+WITH recent AS (
+    SELECT price
+    FROM price_overview
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+    ORDER BY timestamp DESC
+    LIMIT 1
+),
+week_avg AS (
+    SELECT AVG(price) AS avg_price
+    FROM price_history
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND time > datetime('now', '-7 days')
+)
+SELECT recent.price AS current_price,
+       week_avg.avg_price AS week_avg,
+       ((recent.price - week_avg.avg_price) / week_avg.avg_price * 100) AS momentum_pct
+FROM recent, week_avg;
+```
+
+### Order Book Imbalance Alert
+
+Find when sell orders significantly outnumber buy orders:
+
+```sql
+SELECT timestamp,
+       buy_order_count,
+       sell_order_count,
+       (sell_order_count - buy_order_count) AS imbalance,
+       CAST(sell_order_count AS FLOAT) / buy_order_count AS sell_buy_ratio
+FROM orders_histogram
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND timestamp > datetime('now', '-24 hours')
+  AND sell_order_count > buy_order_count * 1.5
+ORDER BY sell_buy_ratio DESC;
+```
+
+## Exporting Data
+
+### Export to CSV
+
+Export query results to a CSV file:
+
+```bash
+sqlite3 -header -csv market_data.db "SELECT * FROM price_history" > export.csv
+```
+
+### Export Specific Date Range
+
+```bash
+sqlite3 -header -csv market_data.db \
+  "SELECT * FROM price_history \
+   WHERE time BETWEEN '2026-03-01' AND '2026-03-03'" \
+  > march_data.csv
+```
+
+### Export with Custom Formatting
+
+```bash
+sqlite3 -header -column market_data.db \
+  "SELECT market_hash_name, \
+          strftime('%Y-%m-%d', time) AS date, \
+          AVG(price) AS avg_price \
+   FROM price_history \
+   GROUP BY market_hash_name, date" \
+  > daily_summary.txt
+```
+
+## Performance Tips
+
+<Tip>
+**Use indexes effectively:** The database is pre-indexed on `(market_hash_name, timestamp DESC)`. Always include `market_hash_name` in your WHERE clause for optimal performance.
+</Tip>
+
+### Good Query (Uses Index)
+
+```sql
+SELECT * FROM price_overview
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND timestamp > datetime('now', '-1 hour');
+```
+
+### Slow Query (Full Table Scan)
+
+```sql
+-- Avoid this - scans entire table
+SELECT * FROM price_overview
+WHERE timestamp > datetime('now', '-1 hour');
+```
+
+### Working with JSON Columns
+
+JSON parsing can be slow. For frequent queries, consider extracting values:
+
+```sql
+-- Slower: Parse JSON every time
+SELECT json_extract(buy_order_table, '$[0].price')
+FROM orders_histogram;
+
+-- Faster: Use pre-computed columns
+SELECT highest_buy_order
+FROM orders_histogram;
+```
+
+## SQLite CLI Tips
+
+Useful SQLite commands for your session:
+
+```sql
+.mode column          -- Format output in columns
+.headers on           -- Show column headers
+.timer on             -- Show query execution time
+.schema price_history -- Show table structure
+.tables               -- List all tables
+.quit                 -- Exit SQLite
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Reference" icon="book" href="/api-reference/database/overview">
+    Explore the database schema in detail
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/troubleshooting">
+    Common query issues and solutions
+  </Card>
+</CardGroup>

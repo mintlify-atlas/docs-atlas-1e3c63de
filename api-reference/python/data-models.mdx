@@ -1,0 +1,482 @@
+---
+title: "Data Models"
+description: "Pydantic models for Steam Market API responses"
+---
+
+## Overview
+
+All Steam API responses are parsed into strongly-typed Pydantic models for validation and type safety. These models match Steam's Market API endpoint response contracts.
+
+---
+
+## PriceOverviewData
+
+Response model for `/priceoverview` endpoint.
+
+```python
+from src.dataClasses import PriceOverviewData
+```
+
+### Fields
+
+<ResponseField name="success" type="bool" required>
+  Whether the API call succeeded
+</ResponseField>
+
+<ResponseField name="lowest_price" type="str | None">
+  Current lowest listing price (formatted string, e.g., "$10.50")
+</ResponseField>
+
+<ResponseField name="median_price" type="str | None">
+  Recent median sale price (formatted string, e.g., "$10.75")
+</ResponseField>
+
+<ResponseField name="volume" type="str | None">
+  Recent sales volume (formatted string, e.g., "1,234")
+</ResponseField>
+
+### Example
+
+```python
+data = PriceOverviewData(
+    success=True,
+    lowest_price="$10.50",
+    median_price="$10.75",
+    volume="1,234"
+)
+
+print(f"Lowest: {data.lowest_price}")
+print(f"Median: {data.median_price}")
+print(f"Volume: {data.volume}")
+```
+
+**API Response Example:**
+
+```json
+{
+  "success": true,
+  "lowest_price": "$10.50",
+  "median_price": "$10.75",
+  "volume": "1,234"
+}
+```
+
+---
+
+## OrderBookEntry
+
+Nested model representing a single order book entry (buy or sell).
+
+```python
+from src.dataClasses import OrderBookEntry
+```
+
+### Fields
+
+<ResponseField name="price" type="str" required>
+  Price as formatted string (e.g., "10.50")
+</ResponseField>
+
+<ResponseField name="quantity" type="str" required>
+  Number of orders at this price level (API returns string, not int)
+</ResponseField>
+
+### Example
+
+```python
+entry = OrderBookEntry(
+    price="10.50",
+    quantity="42"
+)
+
+print(f"Price: {entry.price}, Quantity: {entry.quantity}")
+```
+
+---
+
+## OrdersHistogramData
+
+Response model for `/itemordershistogram` endpoint.
+
+```python
+from src.dataClasses import OrdersHistogramData
+```
+
+### Fields
+
+<ResponseField name="success" type="int | bool" required>
+  Whether the API call succeeded (Steam returns 1 for true)
+</ResponseField>
+
+<ResponseField name="sell_order_count" type="int | str | None">
+  Total number of sell orders
+</ResponseField>
+
+<ResponseField name="sell_order_price" type="str | None">
+  Lowest sell order price
+</ResponseField>
+
+<ResponseField name="sell_order_table" type="List[OrderBookEntry] | None">
+  List of sell order book entries
+</ResponseField>
+
+<ResponseField name="buy_order_count" type="int | str | None">
+  Total number of buy orders
+</ResponseField>
+
+<ResponseField name="buy_order_price" type="str | None">
+  Highest buy order price
+</ResponseField>
+
+<ResponseField name="buy_order_table" type="List[OrderBookEntry] | None">
+  List of buy order book entries
+</ResponseField>
+
+<ResponseField name="highest_buy_order" type="str | None">
+  Highest buy order price string
+</ResponseField>
+
+<ResponseField name="lowest_sell_order" type="str | None">
+  Lowest sell order price string
+</ResponseField>
+
+<ResponseField name="buy_order_graph" type="List" default="[]">
+  Graph data for buy orders
+</ResponseField>
+
+<ResponseField name="sell_order_graph" type="List" default="[]">
+  Graph data for sell orders
+</ResponseField>
+
+<ResponseField name="graph_max_y" type="int | None">
+  Maximum Y value for graph
+</ResponseField>
+
+<ResponseField name="graph_min_x" type="float | None">
+  Minimum X value for graph
+</ResponseField>
+
+<ResponseField name="graph_max_x" type="float | None">
+  Maximum X value for graph
+</ResponseField>
+
+<ResponseField name="price_prefix" type="str" default="">
+  Currency prefix (e.g., "$")
+</ResponseField>
+
+<ResponseField name="price_suffix" type="str" default="">
+  Currency suffix (e.g., "€")
+</ResponseField>
+
+### Example
+
+```python
+data = OrdersHistogramData(
+    success=1,
+    buy_order_count=1234,
+    buy_order_price="10.45",
+    sell_order_count=567,
+    sell_order_price="10.55",
+    highest_buy_order="10.45",
+    lowest_sell_order="10.55",
+    price_prefix="$"
+)
+
+print(f"Buy orders: {data.buy_order_count} at {data.highest_buy_order}")
+print(f"Sell orders: {data.sell_order_count} at {data.lowest_sell_order}")
+print(f"Spread: {float(data.lowest_sell_order) - float(data.highest_buy_order):.2f}")
+```
+
+**API Response Example:**
+
+```json
+{
+  "success": 1,
+  "sell_order_count": 567,
+  "sell_order_price": "10.55",
+  "buy_order_count": 1234,
+  "buy_order_price": "10.45",
+  "highest_buy_order": "10.45",
+  "lowest_sell_order": "10.55",
+  "price_prefix": "$"
+}
+```
+
+---
+
+## ActivityEntry
+
+Parsed model representing a single trade activity event.
+
+```python
+from src.dataClasses import ActivityEntry
+```
+
+**Note:** This is NOT returned by the API - it's created by parsing the HTML strings in the activity array.
+
+### Fields
+
+<ResponseField name="price" type="str | None">
+  Trade price as string (e.g., "0.85")
+</ResponseField>
+
+<ResponseField name="currency" type="str | None">
+  ISO currency code (e.g., "EUR", "USD")
+</ResponseField>
+
+<ResponseField name="action" type="str | None">
+  Activity action (e.g., "Purchased", "Listed")
+</ResponseField>
+
+<ResponseField name="timestamp" type="datetime | None">
+  When the activity occurred
+</ResponseField>
+
+<ResponseField name="raw_html" type="str" required>
+  Original HTML string from API
+</ResponseField>
+
+### Example
+
+```python
+entry = ActivityEntry(
+    price="10.50",
+    currency="USD",
+    action="Purchased",
+    timestamp=datetime(2024, 3, 15, 14, 30),
+    raw_html="<div>Purchased at $10.50</div>"
+)
+
+print(f"{entry.timestamp}: {entry.action} at {entry.price} {entry.currency}")
+```
+
+---
+
+## OrdersActivityData
+
+Response model for `/itemordersactivity` endpoint.
+
+```python
+from src.dataClasses import OrdersActivityData
+```
+
+### Fields
+
+<ResponseField name="success" type="int | bool" required>
+  Whether the API call succeeded (Steam returns 1 for true)
+</ResponseField>
+
+<ResponseField name="activity" type="List[str]" default="[]">
+  List of HTML strings containing trade activity
+</ResponseField>
+
+<ResponseField name="timestamp" type="int" required>
+  Unix timestamp of the response
+</ResponseField>
+
+<ResponseField name="parsed_activities" type="List[ActivityEntry] | None">
+  Parsed activity entries (automatically populated by `SteamAPIClient`)
+</ResponseField>
+
+### Example
+
+```python
+data = OrdersActivityData(
+    success=1,
+    activity=[
+        "<div>Purchased at $10.50</div>",
+        "<div>Listed at $10.75</div>"
+    ],
+    timestamp=1710513000
+)
+
+# parsed_activities is automatically populated by the client
+for activity in data.parsed_activities:
+    print(f"{activity.action}: {activity.price}")
+```
+
+**API Response Example:**
+
+```json
+{
+  "success": 1,
+  "activity": [
+    "<div>Purchased at $10.50</div>",
+    "<div>Listed at $10.75</div>"
+  ],
+  "timestamp": 1710513000
+}
+```
+
+---
+
+## PriceHistoryPoint
+
+Parsed model representing a single price history data point.
+
+```python
+from src.dataClasses import PriceHistoryPoint
+```
+
+**Note:** This is NOT returned by the API - it's created by parsing the arrays in the prices field.
+
+### Fields
+
+<ResponseField name="date_string" type="str" required>
+  Date as string (e.g., "Jul 02 2014 01: +0")
+</ResponseField>
+
+<ResponseField name="price" type="float" required>
+  Median price at this time
+</ResponseField>
+
+<ResponseField name="volume" type="str" required>
+  Trading volume (as string from API)
+</ResponseField>
+
+### Example
+
+```python
+point = PriceHistoryPoint(
+    date_string="Jul 02 2014 01: +0",
+    price=10.50,
+    volume="1234"
+)
+
+print(f"{point.date_string}: ${point.price} (volume: {point.volume})")
+```
+
+---
+
+## PriceHistoryData
+
+Response model for `/pricehistory` endpoint.
+
+```python
+from src.dataClasses import PriceHistoryData
+```
+
+### Fields
+
+<ResponseField name="success" type="bool" required>
+  Whether the API call succeeded
+</ResponseField>
+
+<ResponseField name="price_prefix" type="str" default="">
+  Currency prefix (e.g., "$")
+</ResponseField>
+
+<ResponseField name="price_suffix" type="str" default="">
+  Currency suffix (e.g., "€")
+</ResponseField>
+
+<ResponseField name="prices" type="List[List]" default="[]">
+  Array of [date_string, price_float, volume_string] arrays
+</ResponseField>
+
+### Example
+
+```python
+data = PriceHistoryData(
+    success=True,
+    price_prefix="$",
+    prices=[
+        ["Jul 02 2014 01: +0", 10.50, "1234"],
+        ["Jul 03 2014 01: +0", 10.75, "567"],
+        ["Jul 04 2014 01: +0", 10.60, "890"]
+    ]
+)
+
+for entry in data.prices:
+    date_str, price, volume = entry
+    print(f"{date_str}: {data.price_prefix}{price} (volume: {volume})")
+```
+
+**API Response Example:**
+
+```json
+{
+  "success": true,
+  "price_prefix": "$",
+  "price_suffix": "",
+  "prices": [
+    ["Jul 02 2014 01: +0", 10.50, "1234"],
+    ["Jul 03 2014 01: +0", 10.75, "567"],
+    ["Jul 04 2014 01: +0", 10.60, "890"]
+  ]
+}
+```
+
+---
+
+## Model Hierarchy
+
+```
+PriceOverviewData
+  └─ (flat structure)
+
+OrdersHistogramData
+  └─ sell_order_table: List[OrderBookEntry]
+  └─ buy_order_table: List[OrderBookEntry]
+
+OrdersActivityData
+  └─ parsed_activities: List[ActivityEntry]
+
+PriceHistoryData
+  └─ prices: List[List] (can be parsed into PriceHistoryPoint)
+```
+
+## Type Safety
+
+All models use Pydantic for:
+
+- **Automatic validation**: Invalid data raises `ValidationError`
+- **Type coercion**: `"1"` → `True`, `1` → `1.0`, etc.
+- **Optional fields**: `None` allowed where specified
+- **Default values**: Empty lists/strings where appropriate
+- **Nested models**: Automatic parsing of nested structures
+
+## Usage with SteamAPIClient
+
+The `SteamAPIClient` automatically parses responses into these models:
+
+```python
+async with SteamAPIClient(rate_limiter=limiter) as client:
+    # Returns PriceOverviewData
+    overview = await client.fetch_price_overview(
+        appid=730,
+        market_hash_name="AK-47 | Redline (Field-Tested)"
+    )
+    
+    # Returns OrdersHistogramData
+    histogram = await client.fetch_orders_histogram(
+        appid=730,
+        item_nameid=176059193,
+        currency=1
+    )
+    
+    # Returns OrdersActivityData (with parsed_activities)
+    activity = await client.fetch_orders_activity(
+        item_nameid=176059193
+    )
+    
+    # Returns PriceHistoryData
+    history = await client.fetch_price_history(
+        appid=730,
+        market_hash_name="AK-47 | Redline (Field-Tested)"
+    )
+```
+
+## Validation Errors
+
+If the API returns unexpected data, Pydantic raises `ValidationError`:
+
+```python
+from pydantic import ValidationError
+
+try:
+    data = PriceOverviewData(**api_response)
+except ValidationError as e:
+    print(f"Invalid response: {e}")
+    # Handle validation error
+```

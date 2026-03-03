@@ -1,0 +1,624 @@
+---
+title: 'Common SQL Queries'
+description: 'Practical SQL query patterns for Steam Market data analysis'
+icon: 'code'
+---
+
+## Overview
+
+This page provides common SQL query patterns for analyzing Steam Market data across all tables. All examples use the item `"AK-47 | Redline (Field-Tested)"` - replace with your tracked items.
+
+## Connecting to the Database
+
+```bash
+sqlite3 data/market_data.db
+```
+
+<Tip>
+  All timestamps are stored in **UTC**. Remember to adjust for your local timezone when interpreting results.
+</Tip>
+
+## Basic Queries
+
+<Tabs>
+  <Tab title="Latest Price">
+    Get the most recent price snapshot for an item:
+
+    ```sql
+    SELECT timestamp, lowest_price, median_price, volume
+    FROM price_overview
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+    ORDER BY timestamp DESC
+    LIMIT 1;
+    ```
+  </Tab>
+  
+  <Tab title="Recent Prices">
+    Get all price updates from the last hour:
+
+    ```sql
+    SELECT timestamp, lowest_price, median_price
+    FROM price_overview
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND timestamp > datetime('now', '-1 hour')
+    ORDER BY timestamp DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Current Spread">
+    Get the current bid-ask spread:
+
+    ```sql
+    SELECT timestamp, 
+           highest_buy_order AS bid,
+           lowest_sell_order AS ask,
+           (lowest_sell_order - highest_buy_order) AS spread
+    FROM orders_histogram
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+    ORDER BY timestamp DESC
+    LIMIT 1;
+    ```
+  </Tab>
+  
+  <Tab title="Recent Trades">
+    Get the latest trade activity:
+
+    ```sql
+    SELECT timestamp, parsed_activities, activity_count
+    FROM orders_activity
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+    ORDER BY timestamp DESC
+    LIMIT 10;
+    ```
+  </Tab>
+</Tabs>
+
+## Historical Analysis
+
+<Tabs>
+  <Tab title="Daily Averages">
+    Calculate daily average price over the last 30 days:
+
+    ```sql
+    SELECT date(time) AS day,
+           AVG(price) AS avg_price,
+           SUM(volume) AS total_volume
+    FROM price_history
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND time > datetime('now', '-30 days')
+    GROUP BY date(time)
+    ORDER BY day DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Hourly Trend">
+    Get hourly price trend for today:
+
+    ```sql
+    SELECT strftime('%H:00', time) AS hour, price, volume
+    FROM price_history
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND date(time) = date('now')
+    ORDER BY time;
+    ```
+  </Tab>
+  
+  <Tab title="Price Spikes">
+    Find prices 20% above average:
+
+    ```sql
+    WITH avg_price AS (
+        SELECT AVG(price) AS mean 
+        FROM price_history
+        WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+    )
+    SELECT time, price, volume,
+           (price - mean) / mean * 100 AS spike_pct
+    FROM price_history, avg_price
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND price > mean * 1.2
+    ORDER BY time DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Weekly Summary">
+    Weekly price statistics:
+
+    ```sql
+    SELECT 
+        strftime('%Y-W%W', time) AS week,
+        AVG(price) AS avg_price,
+        MIN(price) AS min_price,
+        MAX(price) AS max_price,
+        SUM(volume) AS total_volume
+    FROM price_history
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND time > datetime('now', '-90 days')
+    GROUP BY strftime('%Y-W%W', time)
+    ORDER BY week DESC;
+    ```
+  </Tab>
+</Tabs>
+
+## Order Book Analysis
+
+<Tabs>
+  <Tab title="Current Order Book">
+    Get full order book (latest snapshot):
+
+    ```sql
+    SELECT timestamp, buy_order_table, sell_order_table
+    FROM orders_histogram
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+    ORDER BY timestamp DESC
+    LIMIT 1;
+    ```
+  </Tab>
+  
+  <Tab title="Order Depth">
+    Track buy/sell order counts over time:
+
+    ```sql
+    SELECT timestamp, 
+           buy_order_count, 
+           sell_order_count,
+           (buy_order_count + sell_order_count) AS total_orders
+    FROM orders_histogram
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND timestamp > datetime('now', '-24 hours')
+    ORDER BY timestamp;
+    ```
+  </Tab>
+  
+  <Tab title="Spread Analysis">
+    Analyze spread volatility over time:
+
+    ```sql
+    SELECT 
+        date(timestamp) AS day,
+        AVG(lowest_sell_order - highest_buy_order) AS avg_spread,
+        MIN(lowest_sell_order - highest_buy_order) AS min_spread,
+        MAX(lowest_sell_order - highest_buy_order) AS max_spread
+    FROM orders_histogram
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND timestamp > datetime('now', '-30 days')
+    GROUP BY date(timestamp)
+    ORDER BY day DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Top Buy Orders">
+    Extract top 5 buy orders using JSON:
+
+    ```sql
+    SELECT 
+        timestamp,
+        json_extract(buy_order_table, '$[0].price') AS bid_1,
+        json_extract(buy_order_table, '$[1].price') AS bid_2,
+        json_extract(buy_order_table, '$[2].price') AS bid_3,
+        json_extract(buy_order_table, '$[3].price') AS bid_4,
+        json_extract(buy_order_table, '$[4].price') AS bid_5
+    FROM orders_histogram
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+    ORDER BY timestamp DESC 
+    LIMIT 1;
+    ```
+  </Tab>
+</Tabs>
+
+## Activity Analysis
+
+<Tabs>
+  <Tab title="Activity Volume">
+    Track activity volume over time:
+
+    ```sql
+    SELECT 
+        strftime('%Y-%m-%d %H:00', timestamp) AS hour,
+        SUM(activity_count) AS total_activities,
+        COUNT(*) AS snapshots_captured
+    FROM orders_activity
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND timestamp > datetime('now', '-24 hours')
+    GROUP BY strftime('%Y-%m-%d %H:00', timestamp)
+    ORDER BY hour DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Activity Types">
+    Count activities by type:
+
+    ```sql
+    SELECT 
+        date(timestamp) AS day,
+        json_each.value ->> '$.action' AS action_type,
+        COUNT(*) AS occurrences
+    FROM orders_activity,
+         json_each(parsed_activities)
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND timestamp > datetime('now', '-7 days')
+    GROUP BY date(timestamp), action_type
+    ORDER BY day DESC, occurrences DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Peak Hours">
+    Find most active trading periods:
+
+    ```sql
+    SELECT 
+        strftime('%H', timestamp) AS hour_of_day,
+        AVG(activity_count) AS avg_activity,
+        SUM(activity_count) AS total_activity
+    FROM orders_activity
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND timestamp > datetime('now', '-30 days')
+    GROUP BY strftime('%H', timestamp)
+    ORDER BY avg_activity DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Individual Trades">
+    Extract individual activities from JSON:
+
+    ```sql
+    SELECT 
+        timestamp,
+        json_each.value ->> '$.price' AS trade_price,
+        json_each.value ->> '$.action' AS trade_action,
+        json_each.value ->> '$.timestamp' AS trade_time
+    FROM orders_activity,
+         json_each(parsed_activities)
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND id = (SELECT MAX(id) FROM orders_activity 
+                WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)')
+    ORDER BY trade_time DESC;
+    ```
+  </Tab>
+</Tabs>
+
+## Cross-Item Comparisons
+
+<Tabs>
+  <Tab title="Price Comparison">
+    Compare current prices across all tracked items:
+
+    ```sql
+    SELECT market_hash_name,
+           MAX(timestamp) AS last_update,
+           lowest_price,
+           volume
+    FROM price_overview
+    GROUP BY market_hash_name
+    ORDER BY volume DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Volatility Ranking">
+    Most volatile items by price range in last 24h:
+
+    ```sql
+    SELECT market_hash_name,
+           MIN(price) AS low,
+           MAX(price) AS high,
+           MAX(price) - MIN(price) AS range,
+           (MAX(price) - MIN(price)) / AVG(price) * 100 AS volatility_pct
+    FROM price_history
+    WHERE time > datetime('now', '-24 hours')
+    GROUP BY market_hash_name
+    ORDER BY volatility_pct DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Volume Leaders">
+    Items with highest trading volume:
+
+    ```sql
+    SELECT 
+        market_hash_name,
+        SUM(volume) AS total_volume_24h,
+        AVG(price) AS avg_price_24h
+    FROM price_history
+    WHERE time > datetime('now', '-24 hours')
+    GROUP BY market_hash_name
+    ORDER BY total_volume_24h DESC
+    LIMIT 10;
+    ```
+  </Tab>
+  
+  <Tab title="Market Activity">
+    Compare activity levels across items:
+
+    ```sql
+    SELECT 
+        market_hash_name,
+        SUM(activity_count) AS total_activities,
+        COUNT(*) AS snapshots
+    FROM orders_activity
+    WHERE timestamp > datetime('now', '-24 hours')
+    GROUP BY market_hash_name
+    ORDER BY total_activities DESC;
+    ```
+  </Tab>
+</Tabs>
+
+## Advanced Queries
+
+<Tabs>
+  <Tab title="Moving Average">
+    7-day simple moving average:
+
+    ```sql
+    SELECT 
+        time,
+        price,
+        AVG(price) OVER (
+            ORDER BY time
+            ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
+        ) AS sma_7day
+    FROM price_history
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND time > datetime('now', '-30 days')
+    ORDER BY time DESC;
+    ```
+    
+    <Note>
+      168 hours = 7 days × 24 hours (7-day moving average)
+    </Note>
+  </Tab>
+  
+  <Tab title="Price Momentum">
+    Calculate price momentum (rate of change):
+
+    ```sql
+    WITH lagged_prices AS (
+        SELECT 
+            time,
+            price,
+            LAG(price, 24) OVER (ORDER BY time) AS price_24h_ago
+        FROM price_history
+        WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+          AND time > datetime('now', '-7 days')
+    )
+    SELECT 
+        time,
+        price,
+        price_24h_ago,
+        (price - price_24h_ago) / price_24h_ago * 100 AS momentum_pct
+    FROM lagged_prices
+    WHERE price_24h_ago IS NOT NULL
+    ORDER BY time DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Correlation">
+    Price correlation between two items:
+
+    ```sql
+    WITH item1 AS (
+        SELECT time, price AS price1
+        FROM price_history
+        WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+    ),
+    item2 AS (
+        SELECT time, price AS price2
+        FROM price_history
+        WHERE market_hash_name = 'AWP | Asiimov (Field-Tested)'
+    )
+    SELECT 
+        COUNT(*) AS observations,
+        AVG(price1) AS avg_item1,
+        AVG(price2) AS avg_item2,
+        (SUM(price1 * price2) - SUM(price1) * SUM(price2) / COUNT(*)) /
+        (SQRT(SUM(price1 * price1) - SUM(price1) * SUM(price1) / COUNT(*)) *
+         SQRT(SUM(price2 * price2) - SUM(price2) * SUM(price2) / COUNT(*))) AS correlation
+    FROM item1 JOIN item2 USING (time)
+    WHERE item1.time > datetime('now', '-30 days');
+    ```
+  </Tab>
+  
+  <Tab title="Bollinger Bands">
+    Calculate Bollinger Bands (20-period, 2 std dev):
+
+    ```sql
+    WITH stats AS (
+        SELECT 
+            time,
+            price,
+            AVG(price) OVER (
+                ORDER BY time
+                ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+            ) AS sma_20,
+            STDEV(price) OVER (
+                ORDER BY time
+                ROWS BETWEEN 19 PRECEDING AND CURRENT ROW
+            ) AS stddev_20
+        FROM price_history
+        WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+          AND time > datetime('now', '-30 days')
+    )
+    SELECT 
+        time,
+        price,
+        sma_20 AS middle_band,
+        sma_20 + (2 * stddev_20) AS upper_band,
+        sma_20 - (2 * stddev_20) AS lower_band
+    FROM stats
+    ORDER BY time DESC;
+    ```
+  </Tab>
+</Tabs>
+
+## JSON Manipulation
+
+<Tabs>
+  <Tab title="Extract Array">
+    Extract all buy orders as individual rows:
+
+    ```sql
+    SELECT 
+        timestamp,
+        json_each.key AS order_index,
+        json_each.value ->> '$.price' AS price,
+        json_each.value ->> '$.quantity' AS quantity
+    FROM orders_histogram,
+         json_each(buy_order_table)
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND id = (SELECT MAX(id) FROM orders_histogram 
+                WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)')
+    ORDER BY price DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Array Length">
+    Count items in JSON arrays:
+
+    ```sql
+    SELECT 
+        timestamp,
+        json_array_length(buy_order_table) AS buy_orders,
+        json_array_length(sell_order_table) AS sell_orders
+    FROM orders_histogram
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+    ORDER BY timestamp DESC
+    LIMIT 10;
+    ```
+  </Tab>
+  
+  <Tab title="Filter JSON">
+    Find activities above a certain price:
+
+    ```sql
+    SELECT 
+        timestamp,
+        json_each.value ->> '$.price' AS price,
+        json_each.value ->> '$.action' AS action
+    FROM orders_activity,
+         json_each(parsed_activities)
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND CAST(REPLACE(REPLACE(json_each.value ->> '$.price', '$', ''), ',', '') AS REAL) > 5.0
+    ORDER BY timestamp DESC;
+    ```
+  </Tab>
+  
+  <Tab title="Aggregate JSON">
+    Aggregate statistics from JSON data:
+
+    ```sql
+    SELECT 
+        market_hash_name,
+        COUNT(*) AS total_activities,
+        json_each.value ->> '$.action' AS action_type,
+        AVG(CAST(REPLACE(REPLACE(json_each.value ->> '$.price', '$', ''), ',', '') AS REAL)) AS avg_price
+    FROM orders_activity,
+         json_each(parsed_activities)
+    WHERE timestamp > datetime('now', '-7 days')
+    GROUP BY market_hash_name, action_type
+    ORDER BY market_hash_name, total_activities DESC;
+    ```
+  </Tab>
+</Tabs>
+
+## Export & Backup
+
+### Export to CSV
+
+```bash
+# Export all price history
+sqlite3 -header -csv data/market_data.db \
+  "SELECT * FROM price_history" > price_history.csv
+
+# Export specific item
+sqlite3 -header -csv data/market_data.db \
+  "SELECT * FROM price_history WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'" \
+  > ak47_redline.csv
+```
+
+### Backup Database
+
+```bash
+# Create backup
+sqlite3 data/market_data.db ".backup data/market_data_backup.db"
+
+# Restore from backup
+sqlite3 data/market_data.db ".restore data/market_data_backup.db"
+```
+
+## Performance Tips
+
+<AccordionGroup>
+  <Accordion title="Use EXPLAIN QUERY PLAN" icon="magnifying-glass-chart">
+    Check if your queries are using indexes efficiently:
+
+    ```sql
+    EXPLAIN QUERY PLAN
+    SELECT * FROM price_overview 
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+    ORDER BY timestamp DESC
+    LIMIT 1;
+    ```
+
+    Look for "USING INDEX" in the output.
+  </Accordion>
+  
+  <Accordion title="Limit Result Sets" icon="filter">
+    Always use `LIMIT` when you don't need all rows:
+
+    ```sql
+    -- Good: Only fetch what you need
+    SELECT * FROM price_history LIMIT 100;
+
+    -- Bad: Fetches everything (can be millions of rows)
+    SELECT * FROM price_history;
+    ```
+  </Accordion>
+  
+  <Accordion title="Filter Early" icon="funnel">
+    Apply WHERE clauses before JOINs and aggregations:
+
+    ```sql
+    -- Good: Filter first
+    SELECT AVG(price)
+    FROM price_history
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+      AND time > datetime('now', '-7 days');
+
+    -- Bad: Scans entire table
+    SELECT AVG(price)
+    FROM price_history
+    WHERE time > datetime('now', '-7 days');
+    ```
+  </Accordion>
+  
+  <Accordion title="Use Appropriate Data Types" icon="database">
+    When extracting JSON data, cast to appropriate types:
+
+    ```sql
+    -- Cast to numeric for calculations
+    CAST(json_extract(buy_order_table, '$[0].price') AS REAL)
+
+    -- Cast to integer for counts
+    CAST(json_extract(buy_order_table, '$[0].quantity') AS INTEGER)
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Related Resources
+
+<CardGroup cols={2}>
+  <Card title="Database Overview" icon="database" href="/api-reference/database/overview">
+    Learn about the database architecture
+  </Card>
+  
+  <Card title="price_overview" icon="chart-line" href="/api-reference/database/price-overview">
+    Current market prices table
+  </Card>
+  
+  <Card title="orders_histogram" icon="chart-bar" href="/api-reference/database/orders-histogram">
+    Order book data table
+  </Card>
+  
+  <Card title="price_history" icon="calendar-days" href="/api-reference/database/price-history">
+    Historical price data table
+  </Card>
+</CardGroup>

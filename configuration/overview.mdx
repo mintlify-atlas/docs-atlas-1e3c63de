@@ -1,0 +1,198 @@
+---
+title: 'Configuration Overview'
+description: 'Understanding the Hridaya configuration system'
+icon: 'gear'
+---
+
+## Configuration System
+
+Hridaya uses a single YAML configuration file (`config.yaml`) to define all tracking behavior, rate limits, and API endpoints. The system validates your configuration at startup to ensure feasibility before making any API requests.
+
+## Configuration File Structure
+
+The configuration file has two main sections:
+
+### LIMITS Section
+
+Defines rate limiting parameters to comply with Steam's API policies:
+
+```yaml
+LIMITS:
+  REQUESTS: 15
+  WINDOW_SECONDS: 60
+```
+
+<ParamField path="REQUESTS" type="integer" required>
+  Maximum number of API requests allowed per time window
+</ParamField>
+
+<ParamField path="WINDOW_SECONDS" type="integer" required>
+  Time window duration in seconds for rate limiting
+</ParamField>
+
+### TRACKING_ITEMS Section
+
+Defines the list of items to track and their polling intervals:
+
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Revolution Case"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 8
+    apiid: 'itemordersactivity'
+```
+
+Each item in this list represents a Steam Community Market item to track.
+
+## Validation Process
+
+The system performs comprehensive validation at startup:
+
+### Required Field Validation
+
+Ensures all items have mandatory fields:
+- `market_hash_name` - Exact Steam market name
+- `appid` - Steam application ID
+- `apiid` - API endpoint identifier
+- `polling-interval-in-seconds` - Update frequency
+
+Endpoint-specific requirements:
+- `item_nameid` - Required for `itemordershistogram` and `itemordersactivity`
+
+<Warning>
+  If any required field is missing, the system will exit with a detailed error message before making any API calls.
+</Warning>
+
+### Feasibility Validation
+
+The system calculates total request load and validates against rate limits:
+
+```python
+# For each item, calculate requests per window
+reqs_per_window = window_seconds // polling_interval_in_seconds
+
+# Sum across all items
+total_requests = sum(reqs_per_window for all items)
+
+# Must satisfy: total_requests <= REQUESTS
+```
+
+**Example Calculation:**
+
+With `REQUESTS: 15` and `WINDOW_SECONDS: 60`:
+
+- Item 1: `60s / 8s = 7.5 req/window`
+- Item 2: `60s / 60s = 1 req/window`
+- Item 3: `60s / 30s = 2 req/window`
+- Item 4: `60s / 60s = 1 req/window`
+- **Total**: `11.5 requests per 60s` ✓ (within limit of 15)
+
+<Tip>
+  The system reports capacity utilization at startup: "Config feasible: 11 req/60s (73.3% capacity)"
+</Tip>
+
+### Startup Output
+
+Successful validation produces output like:
+
+```
+hello world!
+  I see you have a rate limit: 15 requests per 60 seconds
+  ✓ Config feasible: 11 req/60s (73.3% capacity)
+
+  ✓ Shared RateLimiter created (15 req/60s)
+  ✓ Database: SQLite at data/market_data.db
+  ✓ Started HIGH frequency tracking on (3 items)
+  ✓ Started ARCHIVAL work + all known historical snapshots available right now on (1 items)
+
+GO TIME!
+```
+
+## Configuration Best Practices
+
+<Tip>
+  **Start Conservative**: Begin with longer polling intervals (30-60s) and gradually decrease as needed. This helps identify rate limit issues early.
+</Tip>
+
+<Tip>
+  **Monitor Capacity**: Aim for 70-80% capacity utilization. This provides headroom for startup bursts when all items fire simultaneously.
+</Tip>
+
+<Warning>
+  **Startup Burst Warning**: If you track more items than your rate limit, all items attempt to fetch data immediately at startup. The rate limiter will queue them, but expect initial delays.
+</Warning>
+
+## Common Configuration Patterns
+
+### High-Frequency Trading Monitoring
+
+Track volatile items with rapid updates:
+
+```yaml
+LIMITS:
+  REQUESTS: 30
+  WINDOW_SECONDS: 60
+
+TRACKING_ITEMS:
+  - market_hash_name: "Revolution Case"
+    polling-interval-in-seconds: 5
+    apiid: 'itemordersactivity'
+```
+
+### Multi-Endpoint Coverage
+
+Combine different endpoints for comprehensive data:
+
+```yaml
+TRACKING_ITEMS:
+  # Real-time pricing
+  - apiid: 'priceoverview'
+    polling-interval-in-seconds: 30
+  
+  # Order book depth
+  - apiid: 'itemordershistogram'
+    polling-interval-in-seconds: 15
+  
+  # Historical trends
+  - apiid: 'pricehistory'
+    polling-interval-in-seconds: 3600  # Hourly
+```
+
+### Diversified Portfolio Tracking
+
+Track multiple items across different games:
+
+```yaml
+TRACKING_ITEMS:
+  # CS2 Items
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    appid: 730
+  
+  # Dota 2 Items
+  - market_hash_name: "Arcana Bundle"
+    appid: 570
+  
+  # Steam Trading Cards
+  - market_hash_name: "Game Trading Card"
+    appid: 753
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Config Reference" icon="book" href="/configuration/config-reference">
+    Complete parameter reference
+  </Card>
+  <Card title="API Endpoints" icon="plug" href="/configuration/api-endpoints">
+    Learn about the four Steam API endpoints
+  </Card>
+  <Card title="Authentication" icon="lock" href="/configuration/authentication">
+    Setup authentication for pricehistory
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get started with a basic configuration
+  </Card>
+</CardGroup>

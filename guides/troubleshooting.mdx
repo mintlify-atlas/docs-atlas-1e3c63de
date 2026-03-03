@@ -1,0 +1,744 @@
+---
+title: 'Troubleshooting'
+description: 'Common issues and solutions for Hridaya'
+icon: 'wrench'
+---
+
+## Configuration Issues
+
+<AccordionGroup>
+
+<Accordion title="Error: Item missing required field">
+
+**Error Message:**
+```
+❌ CONFIG ERROR: Item 1 missing required field 'apiid'
+   Item: {'market_hash_name': 'AK-47 | Redline (Field-Tested)', ...}
+```
+
+**Cause:** Your item configuration is missing a required parameter.
+
+**Solution:**
+
+Ensure every item has all required fields:
+
+```yaml config.yaml
+TRACKING_ITEMS:
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"  # Required
+    appid: 730                                          # Required
+    apiid: 'priceoverview'                              # Required
+    polling-interval-in-seconds: 30                      # Required
+    currency: 1                                          # Optional
+    country: 'US'                                        # Optional
+    language: 'english'                                  # Optional
+```
+
+**Required fields for all endpoints:**
+- `market_hash_name`
+- `appid`
+- `apiid`
+- `polling-interval-in-seconds`
+
+**Additional requirements:**
+- `item_nameid` is required for `itemordershistogram` and `itemordersactivity`
+
+</Accordion>
+
+<Accordion title="Error: Invalid apiid">
+
+**Error Message:**
+```
+❌ CONFIG ERROR: Item 1 has invalid apiid 'pricedata'
+   Valid options: priceoverview, itemordershistogram, itemordersactivity, pricehistory
+```
+
+**Cause:** You've specified an API endpoint that doesn't exist.
+
+**Solution:**
+
+Use one of the four supported endpoint names:
+
+- `priceoverview` - Current prices and 24h volume
+- `itemordershistogram` - Order book data
+- `itemordersactivity` - Recent trading activity
+- `pricehistory` - Historical hourly data
+
+```yaml config.yaml
+TRACKING_ITEMS:
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    appid: 730
+    apiid: 'priceoverview'  # ✓ Valid
+    # apiid: 'pricedata'    # ✗ Invalid
+    polling-interval-in-seconds: 30
+```
+
+</Accordion>
+
+<Accordion title="Error: Missing item_nameid">
+
+**Error Message:**
+```
+❌ CONFIG ERROR: Item 1 missing 'item_nameid' (required for itemordershistogram)
+   Item: Dreams & Nightmares Case
+```
+
+**Cause:** You're using `itemordershistogram` or `itemordersactivity` without providing the `item_nameid`.
+
+**Solution:**
+
+Find the `item_nameid` using browser DevTools:
+
+<Steps>
+
+<Step title="Open item on Steam Market">
+Navigate to your item's market page.
+</Step>
+
+<Step title="Open DevTools Console">
+Press F12 and go to the Console tab.
+</Step>
+
+<Step title="Extract item_nameid">
+Type: `g_rgAssets[730]` (replace 730 with your appid)
+
+Look for your item in the output. The key is the `item_nameid`.
+</Step>
+
+<Step title="Add to config">
+```yaml config.yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Dreams & Nightmares Case"
+    appid: 730
+    item_nameid: 175982336  # Add this!
+    apiid: 'itemordershistogram'
+    polling-interval-in-seconds: 30
+```
+</Step>
+
+</Steps>
+
+</Accordion>
+
+<Accordion title="Error: Infeasible configuration">
+
+**Error Message:**
+```
+❌ CONFIG ERROR: Infeasible configuration
+   Calculated: 20 requests per 60s
+   Limit: 15 requests per 60s
+   Adjust polling intervals or reduce tracked items
+```
+
+**Cause:** Your polling intervals would exceed the rate limit.
+
+**Calculation:**
+```python
+# For each item: window_seconds ÷ polling-interval-in-seconds
+# Example with 60s window:
+# - 4 items at 10s intervals: 60÷10 = 6 req/item × 4 = 24 req/60s
+# - Limit is 15 req/60s
+# - Result: Infeasible (24 > 15)
+```
+
+**Solutions:**
+
+1. **Increase polling intervals:**
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Item 1"
+    polling-interval-in-seconds: 30  # Changed from 10
+```
+
+2. **Reduce tracked items:**
+Comment out or remove some items from `TRACKING_ITEMS`.
+
+3. **Increase rate limit (if safe):**
+```yaml
+LIMITS:
+  REQUESTS: 20  # Increased from 15 (use cautiously!)
+  WINDOW_SECONDS: 60
+```
+
+<Warning>
+Increasing rate limits too high may result in temporary API bans from Steam.
+</Warning>
+
+</Accordion>
+
+<Accordion title="Error: Unable to load config.yaml">
+
+**Error Message:**
+```
+FileNotFoundError: [Errno 2] No such file or directory: 'config.yaml'
+```
+
+**Cause:** The `config.yaml` file doesn't exist or is in the wrong location.
+
+**Solution:**
+
+1. Ensure `config.yaml` is in the same directory as `cerebro.py`
+2. Check file name spelling (case-sensitive on Linux/Mac)
+3. If running from a subdirectory, use the full path:
+
+```bash
+python cerebro.py
+# OR specify config path
+python cerebro.py --config /path/to/config.yaml
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+## Authentication Issues
+
+<AccordionGroup>
+
+<Accordion title="Error: 401 Unauthorized (pricehistory endpoint)">
+
+**Symptoms:**
+- `pricehistory` endpoint returns 401 errors
+- Historical data is not being fetched
+
+**Cause:** Missing or invalid Steam session cookies.
+
+**Solution:**
+
+<Steps>
+
+<Step title="Create .env file">
+Create a `.env` file in your project root:
+```bash
+touch .env
+```
+</Step>
+
+<Step title="Extract fresh cookies">
+1. Log into Steam in your browser
+2. Open DevTools (F12) → Application/Storage → Cookies
+3. Navigate to `https://steamcommunity.com`
+4. Copy these cookie values:
+   - `sessionid`
+   - `steamLoginSecure`
+</Step>
+
+<Step title="Add to .env">
+```bash .env
+sessionid=your_session_id_here
+steamLoginSecure=76561198XXXXX%7C%7CeyAid...
+```
+</Step>
+
+<Step title="Restart Hridaya">
+```bash
+python cerebro.py
+```
+
+Cookies are hot-swappable - you can update `.env` without restarting.
+</Step>
+
+</Steps>
+
+<Warning>
+Steam session cookies expire after ~1 year. You'll need to refresh them when they expire.
+</Warning>
+
+</Accordion>
+
+<Accordion title="Cookies expired">
+
+**Symptoms:**
+- `pricehistory` was working, now returns 401
+- No recent changes to `.env` file
+
+**Cause:** Steam session cookies have expired (typically after ~1 year).
+
+**Solution:**
+
+Extract fresh cookies using the same method:
+
+1. Log into Steam in your browser
+2. DevTools → Application → Cookies
+3. Copy new `sessionid` and `steamLoginSecure` values
+4. Update `.env` file
+5. Hridaya will automatically use new cookies on next request (hot-swappable)
+
+</Accordion>
+
+</AccordionGroup>
+
+## Rate Limiting Issues
+
+<AccordionGroup>
+
+<Accordion title="Error: 429 Too Many Requests">
+
+**Error Message:**
+```
+aiohttp.ClientResponseError: 429, message='Too Many Requests'
+```
+
+**Cause:** You've exceeded Steam's rate limits.
+
+**Solution:**
+
+1. **Check your rate limit settings:**
+```yaml config.yaml
+LIMITS:
+  REQUESTS: 15  # Steam generally allows ~15-25 req/min
+  WINDOW_SECONDS: 60
+```
+
+2. **Increase polling intervals:**
+Reduce request frequency:
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Item 1"
+    polling-interval-in-seconds: 60  # Increased from 10
+```
+
+3. **Wait before retrying:**
+If you're rate-limited, wait 1-2 minutes before restarting.
+
+<Tip>
+Hridaya's `RateLimiter` should prevent 429 errors. If you're seeing them, you may have multiple instances running or external scripts also hitting the API.
+</Tip>
+
+</Accordion>
+
+<Accordion title="Requests are queuing/slow">
+
+**Symptoms:**
+- Long delays between requests
+- Items not updating at expected intervals
+
+**Cause:** Rate limiter is working as designed - you're at capacity.
+
+**Diagnosis:**
+
+Check startup output:
+```
+✓ Config feasible: 14 req/60s (93.3% capacity)
+```
+
+If capacity is >90%, requests will queue during peak times.
+
+**Solution:**
+
+1. **Increase polling intervals for low-priority items:**
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "High Priority Item"
+    polling-interval-in-seconds: 10  # Fast updates
+  
+  - market_hash_name: "Low Priority Item"
+    polling-interval-in-seconds: 300  # 5 minutes
+```
+
+2. **Reduce tracked items:**
+Remove or comment out items you don't actively monitor.
+
+3. **Increase rate limit (cautiously):**
+```yaml
+LIMITS:
+  REQUESTS: 20  # From 15
+  WINDOW_SECONDS: 60
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+## Database Issues
+
+<AccordionGroup>
+
+<Accordion title="Error: Database is locked">
+
+**Error Message:**
+```
+sqlite3.OperationalError: database is locked
+```
+
+**Cause:** Multiple processes are trying to write to the database simultaneously.
+
+**Solution:**
+
+1. **Check for multiple instances:**
+```bash
+ps aux | grep cerebro
+# Kill extra instances
+kill <pid>
+```
+
+2. **Close SQLite connections:**
+If you have SQLite CLI or database browsers open, close them.
+
+3. **Wait and retry:**
+SQLite locks are usually temporary. Wait a few seconds and try again.
+
+</Accordion>
+
+<Accordion title="No data in database">
+
+**Symptoms:**
+- `market_data.db` exists but tables are empty
+- Queries return no results
+
+**Diagnosis:**
+
+1. **Check if Hridaya is running:**
+```bash
+ps aux | grep cerebro
+```
+
+2. **Verify configuration:**
+```bash
+python cerebro.py
+# Look for: "✓ Started HIGH frequency tracking"
+```
+
+3. **Check tables exist:**
+```bash
+sqlite3 market_data.db
+.tables
+# Should show: orders_activity  orders_histogram  price_history  price_overview
+```
+
+**Solution:**
+
+- Ensure Hridaya is running: `python cerebro.py`
+- Wait for the first polling interval to complete
+- Check for error messages in console output
+
+</Accordion>
+
+<Accordion title="Query returns 'no such column'">
+
+**Error Message:**
+```
+Error: no such column: market_name
+```
+
+**Cause:** Typo in column name.
+
+**Solution:**
+
+Check exact column names:
+```sql
+.schema price_overview
+```
+
+Common mistakes:
+- `market_name` → `market_hash_name` ✓
+- `item_id` → `item_nameid` ✓
+- `time` vs `timestamp` (depends on table)
+
+Refer to the [Database Schema](/guides/querying-data#database-schema) for correct column names.
+
+</Accordion>
+
+</AccordionGroup>
+
+## Network Issues
+
+<AccordionGroup>
+
+<Accordion title="Error: Connection timeout">
+
+**Error Message:**
+```
+aiohttp.ClientConnectorError: Cannot connect to host steamcommunity.com
+OR
+TimeoutError: 
+```
+
+**Cause:** Network connectivity issues or Steam is down.
+
+**Solution:**
+
+1. **Check internet connection:**
+```bash
+ping steamcommunity.com
+```
+
+2. **Check Steam status:**
+Visit [steamstat.us](https://steamstat.us/) or try accessing Steam Market in your browser.
+
+3. **Check firewall:**
+Ensure your firewall allows outbound HTTPS connections.
+
+4. **Increase timeout (if on slow network):**
+Edit `cerebro.py:steamAPIclient.py:36`:
+```python
+self.session = aiohttp.ClientSession(
+    timeout=aiohttp.ClientTimeout(total=60)  # Increased from 30
+)
+```
+
+</Accordion>
+
+<Accordion title="Error: SSL certificate verification failed">
+
+**Error Message:**
+```
+aiohttp.ClientConnectorCertificateError: SSL certificate verification failed
+```
+
+**Cause:** SSL certificate issues (often corporate proxies or outdated certificates).
+
+**Solution:**
+
+1. **Update certificates:**
+```bash
+# Ubuntu/Debian
+sudo apt-get update && sudo apt-get install --reinstall ca-certificates
+
+# macOS
+brew install openssl
+
+# Or update Python's certifi
+pip install --upgrade certifi
+```
+
+2. **If behind corporate proxy:**
+You may need to configure proxy settings or install corporate root certificates.
+
+</Accordion>
+
+</AccordionGroup>
+
+## Data Quality Issues
+
+<AccordionGroup>
+
+<Accordion title="Prices seem incorrect">
+
+**Symptoms:**
+- Prices are much higher/lower than expected
+- Decimal points in wrong place
+
+**Cause:** Currency/regional formatting differences.
+
+**Diagnosis:**
+
+1. **Check currency setting:**
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Item"
+    currency: 1  # 1=USD, 3=EUR, etc.
+```
+
+2. **Verify in database:**
+```sql
+SELECT market_hash_name, currency, lowest_price
+FROM price_overview
+ORDER BY timestamp DESC LIMIT 5;
+```
+
+**Solution:**
+
+Ensure your `currency` setting matches your expectations:
+- `1` = USD ($)
+- `2` = GBP (£)
+- `3` = EUR (€)
+- `5` = RUB (₽)
+- `7` = BRL (R$)
+
+Prices are stored as raw numbers. Apply proper currency formatting in your analysis.
+
+</Accordion>
+
+<Accordion title="Missing data points">
+
+**Symptoms:**
+- Gaps in time series data
+- Expected data points are missing
+
+**Possible Causes:**
+
+1. **Hridaya was stopped:** Check if there were periods when the system wasn't running.
+
+2. **Rate limiting:** If at capacity, some requests may be delayed or skipped.
+
+3. **Network issues:** Temporary connectivity problems.
+
+4. **Steam API errors:** Steam occasionally returns errors for specific items.
+
+**Solution:**
+
+- Keep Hridaya running continuously (use systemd/supervisor in production)
+- Monitor logs for errors
+- Ensure adequate rate limit capacity
+
+</Accordion>
+
+<Accordion title="Duplicate timestamps">
+
+**Symptoms:**
+- Multiple rows with identical timestamps
+- Unexpected duplicate data
+
+**Cause:** This is normal behavior. Each polling interval creates a new snapshot.
+
+**Explanation:**
+
+Hridaya stores every snapshot it takes. If polling every 30 seconds, you'll get ~2 rows per minute. This is intentional for high-fidelity tracking.
+
+**Solution:**
+
+If you want deduplicated data, use `DISTINCT` or aggregation:
+
+```sql
+-- Get one row per minute
+SELECT strftime('%Y-%m-%d %H:%M', timestamp) AS minute,
+       AVG(lowest_price) AS avg_price
+FROM price_overview
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+GROUP BY minute;
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+## Performance Issues
+
+<AccordionGroup>
+
+<Accordion title="High CPU usage">
+
+**Cause:** Multiple concurrent async tasks and database writes.
+
+**Solution:**
+
+1. **Reduce polling frequency:**
+```yaml
+TRACKING_ITEMS:
+  - polling-interval-in-seconds: 60  # From 10
+```
+
+2. **Reduce tracked items:**
+Comment out low-priority items.
+
+3. **Optimize database:**
+```bash
+sqlite3 market_data.db "VACUUM;"
+```
+
+</Accordion>
+
+<Accordion title="Database file growing rapidly">
+
+**Symptoms:**
+- `market_data.db` is very large (>1GB)
+- Disk space running out
+
+**Cause:** High-frequency polling generates large amounts of data.
+
+**Calculation:**
+```
+# Rough estimate:
+# 10 items × 6 req/min × 60 min × 24 hr × ~1KB per row = ~8.6 MB/day
+# Over 30 days: ~260 MB
+```
+
+**Solution:**
+
+1. **Archive old data:**
+```sql
+-- Export data older than 30 days
+.mode csv
+.output archive.csv
+SELECT * FROM price_history WHERE time < datetime('now', '-30 days');
+.output stdout
+
+-- Delete old data
+DELETE FROM price_history WHERE time < datetime('now', '-30 days');
+VACUUM;
+```
+
+2. **Reduce polling frequency for historical data:**
+```yaml
+TRACKING_ITEMS:
+  - apiid: 'pricehistory'
+    polling-interval-in-seconds: 3600  # Once per hour
+```
+
+</Accordion>
+
+<Accordion title="Slow queries">
+
+**Symptoms:**
+- Queries take >1 second
+- Database feels sluggish
+
+**Solution:**
+
+1. **Always filter by item name:**
+```sql
+-- Fast (uses index)
+WHERE market_hash_name = 'Item Name'
+
+-- Slow (full table scan)
+WHERE appid = 730
+```
+
+2. **Use LIMIT for large results:**
+```sql
+SELECT * FROM price_history
+WHERE market_hash_name = 'Item'
+ORDER BY time DESC
+LIMIT 1000;  -- Don't fetch millions of rows
+```
+
+3. **Optimize database:**
+```bash
+sqlite3 market_data.db "ANALYZE; VACUUM;"
+```
+
+</Accordion>
+
+</AccordionGroup>
+
+## Getting Help
+
+If you're still experiencing issues:
+
+<Steps>
+
+<Step title="Check logs">
+Review console output for error messages:
+```bash
+python cerebro.py 2>&1 | tee hridaya.log
+```
+</Step>
+
+<Step title="Verify configuration">
+Double-check `config.yaml` against examples in this documentation.
+</Step>
+
+<Step title="Search existing issues">
+Check GitHub issues for similar problems and solutions.
+</Step>
+
+<Step title="Create an issue">
+If you've found a bug, create a GitHub issue with:
+- Error message (full stack trace)
+- Your `config.yaml` (remove sensitive data)
+- Steps to reproduce
+- Hridaya version
+</Step>
+
+</Steps>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Tracking Items" icon="chart-line" href="/guides/tracking-items">
+    Learn how to configure item tracking
+  </Card>
+  <Card title="Querying Data" icon="database" href="/guides/querying-data">
+    SQL query examples and tips
+  </Card>
+</CardGroup>

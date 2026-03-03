@@ -1,0 +1,255 @@
+---
+title: Introduction
+description: Professional-grade asynchronous data engine for Steam Community Market data ingestion
+---
+
+<img
+  className="block dark:hidden"
+  src="/images/hero-light.svg"
+  alt="Hero Light"
+/>
+<img
+  className="hidden dark:block"
+  src="/images/hero-dark.svg"
+  alt="Hero Dark"
+/>
+
+## The heart of market ingestion
+
+Hridaya (हृदय) is a professional-grade asynchronous data engine engineered to overcome the unique challenges of the Steam Community Market. Unlike standard scrapers, Hridaya acts as a central nervous system for market data, strategically timing every pulse of the exchange to maintain a high-fidelity record of market width and depth.
+
+## What makes Hridaya different
+
+<CardGroup cols={2}>
+  <Card
+    title="Strategic ingestion"
+    icon="calendar-check"
+  >
+    Intelligent scheduling that balances real-time order-book snapshots with massive historical data fetches
+  </Card>
+  <Card
+    title="Resource sovereignty"
+    icon="shield-halved"
+  >
+    A global orchestrator managing a shared sliding-window rate-limit budget across concurrent asynchronous tasks
+  </Card>
+  <Card
+    title="Financial grade integrity"
+    icon="database"
+  >
+    Automated data sanitization translating regional currency symbols and non-standard timestamps into structured numeric data
+  </Card>
+  <Card
+    title="Steam API compliance"
+    icon="check-circle"
+  >
+    Respects Steam's strict 15 requests per minute rate limit through sophisticated rate-limiting algorithms
+  </Card>
+</CardGroup>
+
+## Key features
+
+### Four Steam Market API endpoints
+
+Hridaya supports all major Steam Market data endpoints:
+
+<AccordionGroup>
+  <Accordion title="priceoverview - Current market prices">
+    Fetches the latest lowest price, median price, and sales volume for any Steam item.
+    
+    ```python
+    await client.fetch_price_overview(
+        appid=730,  # CS2
+        market_hash_name="Revolution Case",
+        currency=1,  # USD
+        country="US"
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="itemordershistogram - Order book snapshots">
+    Captures the full buy/sell order book with price levels and quantities.
+    
+    ```python
+    await client.fetch_orders_histogram(
+        appid=730,
+        item_nameid=176042118,
+        currency=1,
+        country="US"
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="itemordersactivity - Recent trade activity">
+    Retrieves real-time trade execution data including purchase timestamps and prices.
+    
+    ```python
+    await client.fetch_orders_activity(
+        item_nameid=176042118,
+        currency=1,
+        country="US"
+    )
+    ```
+  </Accordion>
+
+  <Accordion title="pricehistory - Historical price data">
+    Fetches complete historical price charts (requires Steam session cookies).
+    
+    ```python
+    await client.fetch_price_history(
+        appid=730,
+        market_hash_name="AWP | Neo-Noir (Factory New)",
+        currency=3  # EUR
+    )
+    ```
+  </Accordion>
+</AccordionGroup>
+
+### Dual-database architecture
+
+<Tip>
+Hridaya intelligently routes data to the right storage backend based on data characteristics.
+</Tip>
+
+**SQLite** - High-frequency operational snapshots
+- Price overview data
+- Order book histograms
+- Trade activity logs
+- Optimized with WAL mode and memory-mapped I/O
+
+**TimescaleDB** (optional) - Long-term historical time-series
+- Price history data with automatic compression
+- Hypertable partitioning for efficient queries
+- Automatic data retention policies
+
+### Intelligent scheduling
+
+Two specialized schedulers handle different data collection patterns:
+
+<CodeGroup>
+
+```python snoozerScheduler - High-frequency real-time data
+# Urgency-based priority scheduling
+# Calculates when each item is "most urgent" to poll
+# Ideal for: priceoverview, itemordershistogram, itemordersactivity
+
+live_items = [
+    {
+        "market_hash_name": "Revolution Case",
+        "apiid": "itemordersactivity",
+        "polling-interval-in-seconds": 8
+    }
+]
+
+scheduler = snoozerScheduler(
+    live_items=live_items,
+    rate_limiter=shared_rate_limiter
+)
+```
+
+```python clockworkScheduler - Time-synchronized batch data
+# Fixed-interval scheduling for historical data
+# Fetches complete price history on a predictable cadence
+# Ideal for: pricehistory
+
+history_items = [
+    {
+        "market_hash_name": "AWP | Neo-Noir (Factory New)",
+        "apiid": "pricehistory",
+        "polling-interval-in-seconds": 3600  # Hourly
+    }
+]
+
+scheduler = ClockworkScheduler(
+    items=history_items,
+    rate_limiter=shared_rate_limiter
+)
+```
+
+</CodeGroup>
+
+### Rate limiting that works
+
+<Warning>
+Steam enforces a strict global limit of **15 requests per 60 seconds**. Exceeding this results in temporary IP bans.
+</Warning>
+
+Hridaya uses a sliding-window log algorithm to ensure compliance:
+
+```python
+class RateLimiter:
+    """Sliding Window Log algorithm for Steam API safety."""
+    
+    def __init__(self, max_requests: int = 15, window_seconds: float = 60.0):
+        self._lock = asyncio.Lock()
+        self._timestamps: list[float] = []
+        self._max_requests = max_requests
+        self._window_seconds = window_seconds
+
+    async def acquire_token(self) -> None:
+        """Wait if necessary to respect rate limits."""
+        async with self._lock:
+            current_time = time.time()
+            cutoff_time = current_time - self._window_seconds
+            self._timestamps = [ts for ts in self._timestamps if ts > cutoff_time]
+            
+            if len(self._timestamps) >= self._max_requests:
+                # Calculate exact wait time
+                oldest_timestamp = self._timestamps[0]
+                wait_time = self._window_seconds - (current_time - oldest_timestamp)
+                await asyncio.sleep(wait_time)
+            
+            self._timestamps.append(time.time())
+```
+
+## System architecture
+
+Hridaya follows a clean separation of concerns:
+
+```
+cerebro.py (Orchestrator)         # The brain - entry point and lifecycle manager
+├── RateLimiter                    # Shared rate limiting across all schedulers
+├── snoozerScheduler               # Real-time urgency-based scheduling
+├── clockworkScheduler             # Time-synchronized batch scheduling
+└── SteamAPIClient                 # HTTP client for Steam Market API
+    ├── dataClasses                # Pydantic models for type safety
+    └── SQLinserts                 # Database routing and persistence
+        ├── SQLite                 # Operational snapshots
+        └── TimescaleDB (optional) # Historical time-series
+```
+
+## Use cases
+
+<CardGroup cols={2}>
+  <Card title="Market analysis" icon="chart-line">
+    Build real-time pricing dashboards and historical trend analysis for CS2 skins, cases, and stickers
+  </Card>
+  <Card title="Trading bots" icon="robot">
+    Power algorithmic trading strategies with sub-minute market data refresh rates
+  </Card>
+  <Card title="Price tracking" icon="bell">
+    Set up alerts for price movements, order book depth changes, or trading volume spikes
+  </Card>
+  <Card title="Market research" icon="magnifying-glass-chart">
+    Analyze market microstructure, spread dynamics, and liquidity patterns
+  </Card>
+</CardGroup>
+
+## Next steps
+
+<CardGroup cols={2}>
+  <Card
+    title="Quickstart"
+    icon="rocket"
+    href="/quickstart"
+  >
+    Get Hridaya running in under 5 minutes
+  </Card>
+  <Card
+    title="Installation"
+    icon="download"
+    href="/installation"
+  >
+    Detailed installation and configuration guide
+  </Card>
+</CardGroup>

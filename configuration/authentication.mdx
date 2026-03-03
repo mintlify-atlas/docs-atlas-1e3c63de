@@ -1,0 +1,364 @@
+---
+title: 'Authentication Setup'
+description: 'Configure Steam session cookies for pricehistory endpoint'
+icon: 'lock'
+---
+
+## Overview
+
+The `pricehistory` endpoint requires Steam session cookies to authenticate requests. This is the only endpoint that requires authentication - all other endpoints (`priceoverview`, `itemordershistogram`, `itemordersactivity`) work without authentication.
+
+<Warning>
+  Without valid cookies, `pricehistory` requests will fail with HTTP 401/403 errors or return empty data.
+</Warning>
+
+## Why Authentication is Required
+
+Steam restricts access to historical price data to logged-in users only. The `pricehistory` endpoint returns years of hourly price and volume data, which Steam considers sensitive market information.
+
+## Required Cookies
+
+You need to extract these cookies from your browser while logged into Steam:
+
+<ParamField path="sessionid" type="string" required>
+  Your Steam session identifier. This is the primary authentication token.
+  
+  **Format**: 32-character hexadecimal string
+  
+  **Example**: `a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`
+</ParamField>
+
+<ParamField path="steamLoginSecure" type="string" required>
+  Your Steam login secure token. Contains your Steam ID and authentication signature.
+  
+  **Format**: `{steamid64}||{auth_token}`
+  
+  **Example**: `76561198012345678||A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6`
+</ParamField>
+
+<ParamField path="browserid" type="string">
+  Browser identifier (optional but recommended).
+  
+  **Format**: Long numeric string
+  
+  **Example**: `1234567890123456789`
+</ParamField>
+
+<ParamField path="steamCountry" type="string">
+  Steam country code (optional).
+  
+  **Format**: `{country_code}|{hash}`
+  
+  **Example**: `US|a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6`
+</ParamField>
+
+## Setup Instructions
+
+### Step 1: Log into Steam
+
+1. Open your web browser
+2. Navigate to [https://steamcommunity.com](https://steamcommunity.com)
+3. Log in with your Steam account
+4. Navigate to any market listing page to ensure you're fully authenticated
+
+### Step 2: Extract Cookies
+
+#### Chrome / Edge / Brave
+
+1. Press `F12` to open Developer Tools
+2. Click the **Application** tab (or **Storage** in some browsers)
+3. In the left sidebar, expand **Cookies**
+4. Click on `https://steamcommunity.com`
+5. Find and copy the values for:
+   - `sessionid`
+   - `steamLoginSecure`
+   - `browserid` (optional)
+   - `steamCountry` (optional)
+
+#### Firefox
+
+1. Press `F12` to open Developer Tools
+2. Click the **Storage** tab
+3. In the left sidebar, expand **Cookies**
+4. Click on `https://steamcommunity.com`
+5. Find and copy the values for:
+   - `sessionid`
+   - `steamLoginSecure`
+   - `browserid` (optional)
+   - `steamCountry` (optional)
+
+#### Safari
+
+1. Enable Developer menu: Preferences → Advanced → Show Develop menu
+2. Press `⌘ + ⌥ + I` to open Developer Tools
+3. Click the **Storage** tab
+4. Expand **Cookies** → `https://steamcommunity.com`
+5. Find and copy the values for the required cookies
+
+<Tip>
+  Double-click a cookie value to select the entire string, then copy it. Cookie values can be very long.
+</Tip>
+
+### Step 3: Create .env File
+
+In your project root directory (same location as `config.yaml`), create a file named `.env`:
+
+```bash
+# .env - Steam authentication cookies
+
+# Required cookies
+sessionid=your_session_id_here
+steamLoginSecure=your_steam_login_secure_token_here
+
+# Optional cookies (recommended)
+browserid=your_browser_id_here
+steamCountry=your_steam_country_here
+```
+
+**Replace the placeholder values** with the actual cookie values you extracted:
+
+```bash
+# .env - Example with real values
+
+sessionid=a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+steamLoginSecure=76561198012345678||A1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q7R8S9T0
+browserid=1234567890123456789
+steamCountry=US|a1b2c3d4e5f6g7h8i9j0k1l2m3n4o5p6
+```
+
+<Warning>
+  **Security**: The `.env` file contains sensitive authentication tokens. 
+  - **Never commit it to version control** (add `.env` to `.gitignore`)
+  - Keep file permissions restricted (`chmod 600 .env`)
+  - Never share these cookies publicly
+</Warning>
+
+### Step 4: Verify Setup
+
+Add a `pricehistory` item to your `config.yaml`:
+
+```yaml
+TRACKING_ITEMS:
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 3600
+    apiid: 'pricehistory'
+```
+
+Run Hridaya:
+
+```bash
+python cerebro.py
+```
+
+Successful authentication produces log output showing historical data being fetched and stored.
+
+## How It Works
+
+The authentication system (from `steamAPIclient.py:fetch_price_history`):
+
+1. **Loads cookies from .env** on each request (supports hot-swapping)
+2. **Builds cookie dictionary** with available values
+3. **Sends cookies with request** along with browser-like headers
+4. **Steam validates cookies** and returns historical data
+
+```python
+# From steamAPIclient.py:198-215
+
+# Re-read .env to pick up any hot-swapped cookie values
+load_dotenv(override=True)
+
+# Build cookies fresh each call (enables hot-swapping)
+cookies = {}
+session_id = os.getenv("sessionid")
+steam_login_secure = os.getenv("steamLoginSecure")
+browser_id = os.getenv("browserid")
+steam_country = os.getenv("steamCountry")
+
+if session_id:
+    cookies["sessionid"] = session_id
+if steam_login_secure:
+    cookies["steamLoginSecure"] = steam_login_secure
+if browser_id:
+    cookies["browserid"] = browser_id
+if steam_country:
+    cookies["steamCountry"] = steam_country
+```
+
+<Tip>
+  **Hot-swapping**: You can update `.env` values while Hridaya is running. The system reloads cookies on each request, so new values take effect immediately without restart.
+</Tip>
+
+## Cookie Lifespan
+
+Steam session cookies typically expire after:
+
+- **sessionid**: ~2 weeks of inactivity
+- **steamLoginSecure**: ~1 year or until you log out
+
+### Signs Your Cookies Expired
+
+1. `pricehistory` requests start failing with errors
+2. Empty response data (`{"success": false}`)
+3. HTTP 401 Unauthorized or 403 Forbidden responses
+
+### Refreshing Expired Cookies
+
+1. Log out of Steam in your browser
+2. Log back in
+3. Extract the new cookie values (follow Step 2 above)
+4. Update your `.env` file
+5. No need to restart Hridaya (hot-swapping will pick up new values)
+
+## Security Best Practices
+
+<Warning>
+  **These cookies give full access to your Steam account**. Treat them like passwords.
+</Warning>
+
+### Protect Your Cookies
+
+1. **Never share** your `.env` file or cookie values
+2. **Add to .gitignore**:
+   ```bash
+   echo ".env" >> .gitignore
+   ```
+3. **Restrict file permissions**:
+   ```bash
+   chmod 600 .env  # Owner read/write only
+   ```
+4. **Use a dedicated Steam account** (optional but recommended for automated systems)
+5. **Rotate regularly**: Log out and back in periodically to refresh tokens
+
+### What Someone Can Do With Your Cookies
+
+- Access your Steam profile
+- View your inventory
+- Make trades (if Steam Guard is disabled)
+- Access your market activity
+- View your purchase history
+
+<Tip>
+  For production systems, consider using a dedicated Steam account with:
+  - Strong password
+  - Steam Guard Mobile Authenticator enabled
+  - No valuable inventory items
+  - Limited trading/market permissions
+</Tip>
+
+## Troubleshooting
+
+### Error: "pricehistory request failed"
+
+**Cause**: Missing or invalid cookies
+
+**Solution**:
+1. Verify `.env` file exists in project root
+2. Check that `sessionid` and `steamLoginSecure` are set
+3. Re-extract cookies (they may have expired)
+4. Ensure you're logged into Steam in your browser
+
+### Error: Empty response data
+
+**Cause**: Expired session
+
+**Solution**:
+1. Log out of Steam
+2. Log back in
+3. Extract fresh cookies
+4. Update `.env`
+
+### Error: "success": false
+
+**Cause**: Invalid item or authentication issue
+
+**Solution**:
+1. Verify the `market_hash_name` is correct
+2. Check that the item exists on Steam market
+3. Confirm cookies are valid (try accessing market in browser)
+
+### Cookies work in browser but not in Hridaya
+
+**Cause**: Additional security headers required
+
+**Solution**: The system already includes proper headers (`steamAPIclient.py:226-229`):
+```python
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) ...',
+    'Referer': f'https://steamcommunity.com/market/listings/{appid}/{market_hash_name}'
+}
+```
+
+If still failing:
+1. Check your firewall isn't blocking requests
+2. Ensure your IP isn't rate-limited by Steam
+3. Try using a VPN if your region is restricted
+
+## Alternative: Using Developer Tools Network Tab
+
+If you're having trouble finding cookies:
+
+1. Open Developer Tools (`F12`)
+2. Go to **Network** tab
+3. Navigate to a Steam market listing page
+4. Find a request to `pricehistory`
+5. Click on it → **Headers** → **Request Headers**
+6. Copy the entire `Cookie` header value
+7. Parse out the individual cookie values:
+   ```
+   Cookie: sessionid=abc123; steamLoginSecure=xyz456||token; ...
+   ```
+
+## Example .env Template
+
+Copy this template and fill in your values:
+
+```bash
+# .env - Steam Authentication Configuration
+# DO NOT COMMIT THIS FILE TO VERSION CONTROL
+
+# ============================================
+# REQUIRED COOKIES
+# ============================================
+
+# Steam session ID (32-char hex string)
+sessionid=
+
+# Steam login secure token (format: steamid64||token)
+steamLoginSecure=
+
+# ============================================
+# OPTIONAL COOKIES (Recommended)
+# ============================================
+
+# Browser ID (long numeric string)
+browserid=
+
+# Steam country (format: COUNTRY|hash)
+steamCountry=
+
+# ============================================
+# NOTES
+# ============================================
+# - Extract cookies from browser DevTools while logged into steamcommunity.com
+# - Cookies expire after ~2 weeks of inactivity
+# - Changes take effect immediately (no restart needed)
+# - Keep this file secure - it contains authentication tokens
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="API Endpoints" icon="plug" href="/configuration/api-endpoints">
+    Learn about all four Steam API endpoints
+  </Card>
+  <Card title="Config Reference" icon="book" href="/configuration/config-reference">
+    Complete configuration parameter reference
+  </Card>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get started with basic configuration
+  </Card>
+</CardGroup>

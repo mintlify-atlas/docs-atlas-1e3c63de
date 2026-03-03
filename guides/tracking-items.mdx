@@ -1,0 +1,365 @@
+---
+title: 'Tracking Items'
+description: 'Learn how to configure items for tracking in Hridaya'
+icon: 'chart-line'
+---
+
+## Overview
+
+Hridaya tracks Steam Market items by fetching data from four different API endpoints. Each item you want to track must be configured in `config.yaml` with the appropriate parameters.
+
+## Configuration File Location
+
+All tracking configuration is stored in `config.yaml` at the root of your project:
+
+```yaml
+LIMITS:
+  REQUESTS: 15
+  WINDOW_SECONDS: 60
+
+TRACKING_ITEMS:
+  # Your items go here
+```
+
+## Understanding API Endpoints
+
+Choose the right endpoint (`apiid`) based on what data you need:
+
+| API ID | Data Type | Auth Required | Update Frequency |
+|--------|-----------|---------------|------------------|
+| `priceoverview` | Current prices & 24h volume | No | Seconds |
+| `itemordershistogram` | Full order book (buy/sell orders) | No | Seconds |
+| `itemordersactivity` | Recent buy/sell activity feed | No | Seconds |
+| `pricehistory` | Historical hourly price data | Yes | Hourly |
+
+<Info>
+The `pricehistory` endpoint requires Steam session cookies. See the [Authentication](#authentication) section below.
+</Info>
+
+## Adding Your First Item
+
+<Steps>
+
+<Step title="Find the market hash name">
+Navigate to your item on the Steam Market. The market hash name is in the URL:
+
+```
+https://steamcommunity.com/market/listings/730/AK-47%20%7C%20Redline%20%28Field-Tested%29
+                                            ^^^  ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+                                           appid        market_hash_name (URL encoded)
+```
+
+The decoded name is: `AK-47 | Redline (Field-Tested)`
+</Step>
+
+<Step title="Get the item_nameid (if needed)">
+For `itemordershistogram` and `itemordersactivity` endpoints, you need the numeric `item_nameid`.
+
+**How to find it:**
+1. Open the item page on Steam Market
+2. Open browser DevTools (F12)
+3. Go to Console tab
+4. Type: `g_rgAssets[730]` (replace 730 with your appid)
+5. Find your item in the output - the key is the `item_nameid`
+
+Alternatively, inspect network requests and look for the `item_nameid` parameter.
+</Step>
+
+<Step title="Add to config.yaml">
+Add your item to the `TRACKING_ITEMS` list:
+
+```yaml config.yaml
+TRACKING_ITEMS:
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    appid: 730
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 30
+    apiid: 'priceoverview'
+```
+</Step>
+
+<Step title="Validate configuration">
+Run Hridaya to validate your configuration:
+
+```bash
+python cerebro.py
+```
+
+You should see:
+```
+✓ Config feasible: X req/60s (XX.X% capacity)
+✓ Shared RateLimiter created (15 req/60s)
+✓ Started HIGH frequency tracking on (1 items)
+```
+</Step>
+
+</Steps>
+
+## Required Parameters
+
+### Universal Parameters (All Endpoints)
+
+These parameters are required for every item:
+
+<ParamField path="market_hash_name" type="string" required>
+  Exact Steam market name (e.g., `"AK-47 | Redline (Field-Tested)"`)
+</ParamField>
+
+<ParamField path="appid" type="integer" required>
+  Steam application ID (see [Popular App IDs](#popular-app-ids))
+</ParamField>
+
+<ParamField path="apiid" type="string" required>
+  API endpoint to use: `priceoverview`, `itemordershistogram`, `itemordersactivity`, or `pricehistory`
+</ParamField>
+
+<ParamField path="polling-interval-in-seconds" type="integer" required>
+  How often to fetch data (minimum recommended: 8 seconds)
+</ParamField>
+
+### Endpoint-Specific Parameters
+
+<ParamField path="item_nameid" type="integer">
+  **Required for:** `itemordershistogram` and `itemordersactivity`
+  
+  Numeric Steam item ID found via browser DevTools on the market page
+</ParamField>
+
+### Optional Parameters
+
+<ParamField path="currency" type="integer" default="1">
+  Steam currency code:
+  - `1` = USD
+  - `2` = GBP
+  - `3` = EUR
+  - `5` = RUB
+  - `7` = BRL
+</ParamField>
+
+<ParamField path="country" type="string" default="US">
+  Two-letter country code (e.g., `US`, `GB`, `IN`)
+</ParamField>
+
+<ParamField path="language" type="string" default="english">
+  Language for API responses (e.g., `english`, `spanish`, `french`)
+</ParamField>
+
+## Popular App IDs
+
+| App ID | Game |
+|--------|------|
+| 730 | Counter-Strike 2 (CS2) |
+| 570 | Dota 2 |
+| 440 | Team Fortress 2 |
+| 252490 | Rust |
+| 753 | Steam (trading cards, backgrounds, emoticons) |
+
+## Configuration Examples
+
+### Track Current Prices
+
+```yaml config.yaml
+TRACKING_ITEMS:
+  - market_hash_name: "MP9 | Starlight Protector (Field-Tested)"
+    appid: 730
+    currency: 2  # GBP
+    country: 'GB'
+    language: 'english'
+    polling-interval-in-seconds: 60
+    apiid: 'priceoverview'
+```
+
+### Track Order Book (Bid/Ask)
+
+```yaml config.yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Dreams & Nightmares Case"
+    appid: 730
+    item_nameid: 175982336  # Required!
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 30
+    apiid: 'itemordershistogram'
+```
+
+### Track Recent Activity
+
+```yaml config.yaml
+TRACKING_ITEMS:
+  - market_hash_name: "Revolution Case"
+    appid: 730
+    item_nameid: 176433456  # Required!
+    currency: 1
+    country: 'US'
+    language: 'english'
+    polling-interval-in-seconds: 8
+    apiid: 'itemordersactivity'
+```
+
+### Track Historical Data
+
+```yaml config.yaml
+TRACKING_ITEMS:
+  - market_hash_name: "AWP | Neo-Noir (Factory New)"
+    appid: 730
+    currency: 3  # EUR
+    country: 'DE'
+    language: 'english'
+    polling-interval-in-seconds: 3600  # Once per hour
+    apiid: 'pricehistory'  # Requires authentication!
+```
+
+## Authentication
+
+The `pricehistory` endpoint requires Steam session cookies.
+
+<Steps>
+
+<Step title="Create .env file">
+Create a `.env` file in your project root:
+
+```bash .env
+sessionid=your_session_id_here
+steamLoginSecure=your_steam_login_secure_token_here
+```
+</Step>
+
+<Step title="Extract cookies from browser">
+1. Log into Steam in your browser
+2. Open DevTools (F12) → Application/Storage tab
+3. Navigate to Cookies → `https://steamcommunity.com`
+4. Copy values for:
+   - `sessionid`
+   - `steamLoginSecure`
+</Step>
+
+<Step title="Add to .env">
+Paste the cookie values into your `.env` file:
+
+```bash .env
+sessionid=abc123def456...
+steamLoginSecure=76561198XXXXX%7C%7CeyAid...
+```
+</Step>
+
+</Steps>
+
+<Warning>
+Keep your `.env` file private! Never commit it to version control.
+</Warning>
+
+## Rate Limiting
+
+Hridaya enforces a global rate limit to prevent API bans.
+
+### Configure Rate Limits
+
+```yaml config.yaml
+LIMITS:
+  REQUESTS: 15          # Max requests per window
+  WINDOW_SECONDS: 60    # Time window in seconds
+```
+
+### Validate Feasibility
+
+Hridaya automatically validates that your configuration is feasible:
+
+```python
+# Calculation: window_seconds ÷ polling-interval-in-seconds per item
+# Example:
+# - Item A: 60s ÷ 30s = 2 req/window
+# - Item B: 60s ÷ 60s = 1 req/window
+# Total: 3 req/window (feasible if limit is 15)
+```
+
+If your config exceeds the limit, you'll see:
+
+```
+❌ CONFIG ERROR: Infeasible configuration
+   Calculated: 20 requests per 60s
+   Limit: 15 requests per 60s
+   Adjust polling intervals or reduce tracked items
+```
+
+<Tip>
+The system uses urgency-based scheduling, so real usage is typically lower than the calculated maximum.
+</Tip>
+
+## Tracking Multiple Items
+
+You can track multiple items across different games and endpoints:
+
+```yaml config.yaml
+LIMITS:
+  REQUESTS: 15
+  WINDOW_SECONDS: 60
+
+TRACKING_ITEMS:
+  # CS2 item - current prices
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    appid: 730
+    polling-interval-in-seconds: 30
+    apiid: 'priceoverview'
+
+  # CS2 item - order book
+  - market_hash_name: "Dreams & Nightmares Case"
+    appid: 730
+    item_nameid: 175982336
+    polling-interval-in-seconds: 30
+    apiid: 'itemordershistogram'
+
+  # Dota 2 item - historical data
+  - market_hash_name: "Pudge Arcana"
+    appid: 570
+    polling-interval-in-seconds: 3600
+    apiid: 'pricehistory'
+
+  # Steam trading card
+  - market_hash_name: "Counter-Strike Foil Trading Card"
+    appid: 753
+    polling-interval-in-seconds: 120
+    apiid: 'priceoverview'
+```
+
+## Common Configuration Errors
+
+### Missing Required Field
+
+```
+❌ CONFIG ERROR: Item 1 missing required field 'apiid'
+   Item: {'market_hash_name': 'AK-47 | Redline (Field-Tested)', ...}
+```
+
+**Solution:** Add the missing field to your item configuration.
+
+### Invalid apiid
+
+```
+❌ CONFIG ERROR: Item 1 has invalid apiid 'pricedata'
+   Valid options: priceoverview, itemordershistogram, itemordersactivity, pricehistory
+```
+
+**Solution:** Use one of the four supported endpoint names.
+
+### Missing item_nameid
+
+```
+❌ CONFIG ERROR: Item 1 missing 'item_nameid' (required for itemordershistogram)
+   Item: Dreams & Nightmares Case
+```
+
+**Solution:** Add the `item_nameid` parameter (see [Get the item_nameid](#adding-your-first-item)).
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Querying Data" icon="database" href="/guides/querying-data">
+    Learn how to query the SQLite database with SQL examples
+  </Card>
+  <Card title="Troubleshooting" icon="wrench" href="/guides/troubleshooting">
+    Common issues and solutions
+  </Card>
+</CardGroup>

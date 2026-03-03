@@ -1,0 +1,251 @@
+---
+title: "Orchestrator"
+description: "Backend entry point for coordinating schedulers with shared rate limiting"
+---
+
+## Overview
+
+The `Orchestrator` class is the main backend entry point for the CS2 Market Tracker. It coordinates all schedulers with shared rate limiting, ensuring all components work in harmony without exceeding Steam's API rate limits.
+
+Think of it as a choir conductor - it ensures all parts (schedulers) work together while respecting API constraints.
+
+## Class Definition
+
+```python
+from cerebro import Orchestrator
+
+orchestrator = Orchestrator(config_path="config.yaml")
+```
+
+### Constructor
+
+<ParamField path="config_path" type="str" default="config.yaml">
+  Path to YAML configuration file
+</ParamField>
+
+## Attributes
+
+<ResponseField name="config" type="dict | None">
+  Loaded configuration from YAML file
+</ResponseField>
+
+<ResponseField name="rate_limiter" type="RateLimiter | None">
+  Shared rate limiter instance used by all schedulers
+</ResponseField>
+
+<ResponseField name="snoozerScheduler" type="snoozerScheduler | None">
+  High-frequency scheduler for live market data
+</ResponseField>
+
+<ResponseField name="clockworkScheduler" type="ClockworkScheduler | None">
+  Fixed-interval scheduler for historical price data
+</ResponseField>
+
+<ResponseField name="shutdown_event" type="asyncio.Event">
+  Event for coordinating graceful shutdown
+</ResponseField>
+
+## Methods
+
+### load_and_validate_config()
+
+Loads configuration from YAML file and validates feasibility.
+
+```python
+def load_and_validate_config(self):
+    """Load config and validate feasibility."""
+```
+
+Performs:
+- Configuration loading from YAML
+- Required field validation
+- Rate limit feasibility calculation
+
+**Raises:**
+- `SystemExit`: If configuration is invalid or infeasible
+
+---
+
+### validate_required_fields()
+
+Validates that each tracking item has all required fields.
+
+```python
+def validate_required_fields(self, items: list):
+```
+
+<ParamField path="items" type="list">
+  List of tracking items to validate
+</ParamField>
+
+**Required fields:**
+- All items: `market_hash_name`, `apiid`, `polling-interval-in-seconds`, `appid`
+- histogram/activity: `item_nameid` (additional)
+
+**Valid apiids:**
+- `priceoverview`
+- `itemordershistogram`
+- `itemordersactivity`
+- `pricehistory`
+
+**Raises:**
+- `SystemExit`: If any required fields are missing or invalid
+
+---
+
+### validate_config_feasibility()
+
+Validates that configuration is feasible given rate limits.
+
+```python
+def validate_config_feasibility(
+    self, 
+    rate_limit: int, 
+    window_seconds: int, 
+    items: list
+):
+```
+
+<ParamField path="rate_limit" type="int">
+  Maximum requests per window
+</ParamField>
+
+<ParamField path="window_seconds" type="int">
+  Time window in seconds
+</ParamField>
+
+<ParamField path="items" type="list">
+  List of tracking items with their configurations
+</ParamField>
+
+Calculates maximum requests per window assuming worst-case (all items synchronized). Real usage will typically be lower due to urgency-based scheduling spreading requests.
+
+**Raises:**
+- `SystemExit`: If calculated requests exceed rate limit
+
+---
+
+### setup_schedulers()
+
+Creates scheduler instances with shared rate limiter.
+
+```python
+def setup_schedulers(self):
+```
+
+This method:
+1. Creates a single shared `RateLimiter` instance (critical for API compliance)
+2. Filters items by type (live vs. history)
+3. Initializes `snoozerScheduler` for live items (priceoverview, histogram, activity)
+4. Initializes `ClockworkScheduler` for pricehistory items
+
+---
+
+### setup_signal_handlers()
+
+Sets up signal handlers for graceful shutdown.
+
+```python
+def setup_signal_handlers(self):
+```
+
+Registers handlers for:
+- `SIGINT` (Ctrl+C)
+- `SIGTERM` (kill command)
+
+---
+
+### shutdown()
+
+Handles graceful shutdown of all schedulers.
+
+```python
+async def shutdown(self):
+```
+
+Sets the shutdown event, triggering all schedulers to stop gracefully.
+
+---
+
+### run()
+
+Main orchestrator loop. Runs all schedulers concurrently until shutdown signal.
+
+```python
+async def run(self):
+```
+
+**Algorithm:**
+1. Load and validate configuration
+2. Setup schedulers with shared rate limiter
+3. Setup signal handlers for graceful shutdown
+4. Run all schedulers concurrently
+5. Wait for shutdown event or task failure
+6. Cancel remaining tasks and exit gracefully
+
+## Usage Example
+
+```python
+import asyncio
+from cerebro import Orchestrator
+
+async def main():
+    orchestrator = Orchestrator(config_path="config.yaml")
+    await orchestrator.run()
+
+if __name__ == "__main__":
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("\nKeyboard interrupt received. Exiting...")
+    except Exception as e:
+        print(f"\nFatal error: {e}")
+        raise
+```
+
+## Configuration Structure
+
+The orchestrator expects a YAML configuration with the following structure:
+
+```yaml
+LIMITS:
+  REQUESTS: 15
+  WINDOW_SECONDS: 60
+
+TRACKING_ITEMS:
+  - market_hash_name: "AK-47 | Redline (Field-Tested)"
+    apiid: "priceoverview"
+    appid: 730
+    polling-interval-in-seconds: 30
+    currency: 1
+    country: "US"
+    language: "english"
+  
+  - market_hash_name: "AWP | Asiimov (Field-Tested)"
+    apiid: "itemordershistogram"
+    appid: 730
+    item_nameid: 176059193
+    polling-interval-in-seconds: 60
+```
+
+## Popular App IDs
+
+<ResponseField name="730" type="int">
+  Counter-Strike 2 (CS2)
+</ResponseField>
+
+<ResponseField name="570" type="int">
+  Dota 2
+</ResponseField>
+
+<ResponseField name="440" type="int">
+  Team Fortress 2
+</ResponseField>
+
+<ResponseField name="252490" type="int">
+  Rust
+</ResponseField>
+
+<ResponseField name="753" type="int">
+  Steam (trading cards, backgrounds, emoticons)
+</ResponseField>

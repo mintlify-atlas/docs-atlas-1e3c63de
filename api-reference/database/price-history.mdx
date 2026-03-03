@@ -1,0 +1,311 @@
+---
+title: 'price_history Table'
+description: 'Historical hourly price and volume data for long-term analysis'
+icon: 'calendar-days'
+---
+
+## Overview
+
+The `price_history` table stores historical hourly price and volume data going back years. This is your time-series data for long-term trend analysis, similar to OHLC (Open-High-Low-Close) stock data.
+
+**Data Source:** `pricehistory` API endpoint
+
+**Update Frequency:** Hourly
+
+**Use Case:** Long-term trend analysis, price forecasting, volatility studies
+
+**Authentication Required:** Yes (Steam session cookies)
+
+<Warning>
+  This endpoint requires Steam session cookies (`sessionid` and `steamLoginSecure`) in your `.env` file.
+</Warning>
+
+## Storage Options
+
+This table supports two storage backends:
+
+<Tabs>
+  <Tab title="SQLite (Default)">
+    Default storage in the main SQLite database.
+    
+    **Pros:** Simple setup, no additional dependencies
+    
+    **Cons:** Less optimized for time-series queries, no automatic compression
+  </Tab>
+  
+  <Tab title="TimescaleDB (Optional)">
+    PostgreSQL extension optimized for time-series data.
+    
+    **Pros:** 
+    - Automatic data compression (7+ day old data)
+    - Automatic retention policies (90 day default)
+    - Better query performance on large datasets
+    - Hypertable partitioning
+    
+    **Cons:** Requires PostgreSQL + TimescaleDB setup
+  </Tab>
+</Tabs>
+
+## Table Schema
+
+<ResponseField name="id" type="INTEGER" required>
+  Auto-incrementing primary key (SQLite only)
+</ResponseField>
+
+<ResponseField name="time" type="DATETIME" required>
+  The hour this data point represents (UTC)
+  
+  **TimescaleDB:** `TIMESTAMPTZ` (timestamp with timezone)
+  
+  **SQLite:** `DATETIME`
+</ResponseField>
+
+<ResponseField name="appid" type="INTEGER" required>
+  Steam application ID (730 for CS2, 570 for Dota 2, etc.)
+</ResponseField>
+
+<ResponseField name="market_hash_name" type="TEXT" required>
+  Exact Steam market name
+</ResponseField>
+
+<ResponseField name="item_nameid" type="INTEGER">
+  Steam's internal numeric item ID (may be null)
+</ResponseField>
+
+<ResponseField name="currency" type="TEXT" required>
+  ISO 4217 currency code (USD, EUR, GBP, etc.)
+</ResponseField>
+
+<ResponseField name="country" type="TEXT" required>
+  Two-letter country code used for the request
+</ResponseField>
+
+<ResponseField name="language" type="TEXT" required>
+  Language used for the request
+</ResponseField>
+
+<ResponseField name="price" type="REAL" required>
+  Median price during this hour
+  
+  **TimescaleDB:** `DOUBLE PRECISION`
+  
+  **SQLite:** `REAL`
+</ResponseField>
+
+<ResponseField name="volume" type="INTEGER" required>
+  Number of sales during this hour
+</ResponseField>
+
+<ResponseField name="fetched_at" type="DATETIME" default="NOW()">
+  When we fetched this data from Steam (UTC)
+</ResponseField>
+
+## Indexes and Constraints
+
+### SQLite
+
+```sql
+-- Unique constraint to prevent duplicates
+UNIQUE(market_hash_name, time)
+
+-- Performance indexes
+CREATE INDEX idx_history_item_time
+  ON price_history(market_hash_name, time DESC);
+
+CREATE INDEX idx_history_timestamp
+  ON price_history(time DESC);
+```
+
+### TimescaleDB
+
+```sql
+-- Primary key
+PRIMARY KEY (market_hash_name, time)
+
+-- Hypertable configuration
+SELECT create_hypertable('price_history', 'time');
+
+-- Compression policy (data older than 7 days)
+ALTER TABLE price_history SET (
+    timescaledb.compress,
+    timescaledb.compress_segmentby = 'market_hash_name'
+);
+
+-- Retention policy (delete data older than 90 days)
+SELECT add_retention_policy('price_history', INTERVAL '90 days');
+```
+
+## Example Queries
+
+### Daily Average Price (Last 30 Days)
+
+```sql
+SELECT date(time) AS day,
+       AVG(price) AS avg_price,
+       SUM(volume) AS total_volume
+FROM price_history
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND time > datetime('now', '-30 days')
+GROUP BY date(time)
+ORDER BY day DESC;
+```
+
+### Hourly Price Trend for Today
+
+```sql
+SELECT strftime('%H:00', time) AS hour, 
+       price, 
+       volume
+FROM price_history
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND date(time) = date('now')
+ORDER BY time;
+```
+
+### Find Price Spikes (20% Above Average)
+
+```sql
+WITH avg_price AS (
+    SELECT AVG(price) AS mean 
+    FROM price_history
+    WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+)
+SELECT time, price, volume,
+       (price - mean) / mean * 100 AS spike_pct
+FROM price_history, avg_price
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND price > mean * 1.2
+ORDER BY time DESC;
+```
+
+### Most Volatile Items (Last 24 Hours)
+
+```sql
+SELECT market_hash_name,
+       MIN(price) AS low,
+       MAX(price) AS high,
+       MAX(price) - MIN(price) AS price_range,
+       (MAX(price) - MIN(price)) / AVG(price) * 100 AS volatility_pct
+FROM price_history
+WHERE time > datetime('now', '-24 hours')
+GROUP BY market_hash_name
+ORDER BY volatility_pct DESC;
+```
+
+### Weekly Price Comparison
+
+```sql
+SELECT 
+    strftime('%Y-W%W', time) AS week,
+    AVG(price) AS avg_price,
+    MIN(price) AS min_price,
+    MAX(price) AS max_price,
+    SUM(volume) AS total_volume
+FROM price_history
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND time > datetime('now', '-90 days')
+GROUP BY strftime('%Y-W%W', time)
+ORDER BY week DESC;
+```
+
+### Moving Average (7-Day)
+
+```sql
+SELECT 
+    time,
+    price,
+    AVG(price) OVER (
+        ORDER BY time
+        ROWS BETWEEN 167 PRECEDING AND CURRENT ROW
+    ) AS sma_7day
+FROM price_history
+WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'
+  AND time > datetime('now', '-30 days')
+ORDER BY time DESC;
+```
+
+<Note>
+  Moving average uses 168 hours (7 days × 24 hours) of data.
+</Note>
+
+## Data Updates
+
+The system intelligently handles incremental updates:
+
+1. **First Run:** Inserts all available historical data (can be years)
+2. **Subsequent Runs:** Only inserts new data points since last fetch
+3. **Duplicate Prevention:** `ON CONFLICT DO NOTHING` prevents duplicate entries
+
+```python
+# From SQLinserts.py
+# Only inserts data AFTER the most recent timestamp
+last_timestamp = await conn.fetchval(
+    "SELECT MAX(time) FROM price_history WHERE market_hash_name = $1",
+    market_hash_name
+)
+```
+
+## Export to CSV
+
+Export historical data for external analysis:
+
+```bash
+sqlite3 -header -csv data/market_data.db \
+  "SELECT * FROM price_history WHERE market_hash_name = 'AK-47 | Redline (Field-Tested)'" \
+  > export.csv
+```
+
+## TimescaleDB Configuration
+
+To enable TimescaleDB storage, provide the connection string:
+
+```python
+from src.SQLinserts import SQLinserts
+
+async with SQLinserts(
+    sqlite_path="data/market_data.db",
+    timescale_dsn="postgresql://user:pass@localhost/cs2market",
+    timescale_pool_min=10,
+    timescale_pool_max=100
+) as db:
+    await db.store_data(price_history_data, item_config)
+```
+
+## Data Flow
+
+```mermaid
+flowchart LR
+    A[Steam API] -->|pricehistory| B[API Client]
+    B -->|PriceHistoryData| C[SQLinserts]
+    C -->|Check Last Timestamp| D{New Data?}
+    D -->|Yes| E[Insert Delta]
+    D -->|No| F[Skip]
+    E --> G[(SQLite or TimescaleDB)]
+```
+
+## Authentication Setup
+
+The `pricehistory` endpoint requires Steam session cookies:
+
+1. Log into Steam in your browser
+2. Open Developer Tools (F12)
+3. Go to Application → Cookies → https://steamcommunity.com
+4. Copy `sessionid` and `steamLoginSecure` values
+5. Add to `.env` file:
+
+```bash
+sessionid=your_session_id_here
+steamLoginSecure=your_steam_login_secure_token_here
+```
+
+## Related Tables
+
+<CardGroup cols={2}>
+  <Card title="price_overview" icon="chart-line" href="/api-reference/database/price-overview">
+    Real-time current prices and volumes
+  </Card>
+  
+  <Card title="Query Examples" icon="code" href="/api-reference/database/queries">
+    More complex historical analysis queries
+  </Card>
+</CardGroup>
