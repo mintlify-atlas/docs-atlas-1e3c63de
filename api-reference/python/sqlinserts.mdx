@@ -1,0 +1,272 @@
+---
+title: SQLinserts
+description: Database persistence layer managing SQLite and TimescaleDB storage
+---
+
+The `SQLinserts` class handles all database operations, routing data to appropriate storage backends based on type and configuration.
+
+## Overview
+
+`SQLinserts` is the data persistence layer that:
+- Routes API responses to correct database tables
+- Manages both SQLite (operational data) and TimescaleDB (time-series data) connections
+- Handles schema creation and migrations
+- Parses Steam's formatted strings (prices, volumes, dates)
+- Ensures data integrity with ACID transactions
+
+## Class Definition
+
+```python
+class SQLinserts:
+    """
+    Manages data persistence across SQLite and TimescaleDB.
+    
+    Routes data objects to the appropriate database based on type.
+    """
+    
+    def __init__(
+        self,
+        sqlite_path: str = "data/market_data.db",
+        timescale_dsn: Optional[str] = None,
+        timescale_pool_min: int = 10,
+        timescale_pool_max: int = 100
+    ):
+        ...
+```
+
+## Constructor Parameters
+
+<ParamField path="sqlite_path" type="str" default="data/market_data.db">
+  Path to SQLite database file for operational data (price_overview, orders_histogram, orders_activity)
+</ParamField>
+
+<ParamField path="timescale_dsn" type="str | None" default="None">
+  PostgreSQL connection string for TimescaleDB. If None, price_history will use SQLite instead.
+  
+  Format: `"postgresql://user:pass@localhost/dbname"`
+</ParamField>
+
+<ParamField path="timescale_pool_min" type="int" default="10">
+  Minimum connections in TimescaleDB pool
+</ParamField>
+
+<ParamField path="timescale_pool_max" type="int" default="100">
+  Maximum connections in TimescaleDB pool
+</ParamField>
+
+## Methods
+
+### initialize()
+
+Initialize database connections and create schemas.
+
+```python
+async def initialize(self) -> None:
+    """Initialize database connections and create schemas."""
+```
+
+This method:
+- Creates SQLite connection with performance optimizations (WAL mode, memory-mapped I/O)
+- Sets busy timeout to 30 seconds for concurrent access
+- Creates all tables and indexes
+- Establishes TimescaleDB connection pool if configured
+- Creates hypertable with compression and retention policies
+
+### close()
+
+Close all database connections.
+
+```python
+async def close(self) -> None:
+    """Close all database connections."""
+```
+
+### store_data()
+
+Route data to appropriate database based on type.
+
+```python
+async def store_data(
+    self,
+    data: PriceOverviewData | OrdersHistogramData | OrdersActivityData | PriceHistoryData,
+    item_config: dict
+) -> None:
+    """
+    Route data to appropriate database based on type.
+    
+    Args:
+        data: Pydantic data object from API client
+        item_config: Item configuration dict with market_hash_name, appid, etc.
+    """
+```
+
+Uses pattern matching to route:
+- `PriceOverviewData` → SQLite `price_overview` table
+- `OrdersHistogramData` → SQLite `orders_histogram` table  
+- `OrdersActivityData` → SQLite `orders_activity` table
+- `PriceHistoryData` → TimescaleDB (or SQLite if not configured)
+
+## Database Configuration
+
+### SQLite Optimizations
+
+The class applies these optimizations for concurrent access:
+
+```python
+PRAGMA busy_timeout=30000      # Wait up to 30s for locks
+PRAGMA journal_mode=WAL        # Write-Ahead Logging for concurrency
+PRAGMA synchronous=NORMAL      # Balance safety vs speed
+PRAGMA cache_size=-64000       # 64MB cache
+PRAGMA temp_store=MEMORY       # Store temp tables in RAM
+PRAGMA mmap_size=268435456     # 256MB memory-mapped I/O
+PRAGMA page_size=4096          # Optimal page size
+```
+
+### TimescaleDB Hypertable
+
+When TimescaleDB is configured, the `price_history` table becomes a hypertable with:
+- **Compression policy**: Compress data older than 7 days
+- **Retention policy**: Delete data older than 90 days
+- **Segmentation**: By `market_hash_name` for optimal compression
+
+## Usage Examples
+
+### Basic Usage (SQLite only)
+
+```python
+from src.SQLinserts import SQLinserts
+
+async def main():
+    async with SQLinserts(sqlite_path="data/market_data.db") as wizard:
+        # Fetch data from API
+        result = await client.fetch_price_overview(
+            appid=730,
+            market_hash_name="AK-47 | Redline (Field-Tested)"
+        )
+        
+        # Store to database
+        await wizard.store_data(result, item_config)
+```
+
+### With TimescaleDB
+
+```python
+from src.SQLinserts import SQLinserts
+
+async def main():
+    async with SQLinserts(
+        sqlite_path="data/market_data.db",
+        timescale_dsn="postgresql://user:pass@localhost/cs2market"
+    ) as wizard:
+        # price_history data will be stored in TimescaleDB
+        # Other data types still use SQLite
+        result = await client.fetch_price_history(
+            appid=730,
+            market_hash_name="AK-47 | Redline (Field-Tested)"
+        )
+        
+        await wizard.store_data(result, item_config)
+```
+
+### Manual Connection Management
+
+```python
+wizard = SQLinserts()
+await wizard.initialize()
+
+try:
+    # Use wizard for data storage
+    await wizard.store_data(data, config)
+finally:
+    await wizard.close()
+```
+
+## Data Parsing Utilities
+
+The class includes private utility methods for parsing Steam's formatted data:
+
+### _parse_steam_price()
+
+Parses price strings with various currency symbols and formats:
+- `"0,03€"` → `0.03`
+- `"$5.00"` → `5.0`
+- `"1.234,56€"` → `1234.56`
+
+Handles European (comma decimal) and US (period decimal) formats.
+
+### _parse_volume()
+
+Parses volume strings to integers:
+- `"435"` → `435`
+- `"1,234"` → `1234`
+
+### _extract_currency()
+
+Extracts ISO 4217 currency codes from price strings:
+- `"$5.00"` → `"USD"`
+- `"0,03€"` → `"EUR"`
+- `"£4.99"` → `"GBP"`
+
+Supports 18+ currency symbols.
+
+### _parse_steam_datetime()
+
+Parses Steam's datetime format:
+- `"Jul 02 2014 01: +0"` → `datetime(2014, 7, 2, 1, 0)`
+
+## Storage Strategy
+
+### Operational Data (SQLite)
+
+- **price_overview**: Current market snapshots, fast inserts
+- **orders_histogram**: Order book depth, JSON storage for tables/graphs
+- **orders_activity**: Trade feed with parsed activities
+
+Indexed by `(market_hash_name, timestamp DESC)` for fast queries.
+
+### Time-Series Data (TimescaleDB or SQLite)
+
+- **price_history**: Hourly price points, optimized for time-series queries
+
+When using TimescaleDB:
+- Automatic compression after 7 days
+- Automatic retention (90 days)
+- Hypertable chunking for query performance
+- Batch inserts with conflict resolution (ON CONFLICT DO NOTHING)
+
+When using SQLite (fallback):
+- UNIQUE constraint on `(market_hash_name, time)`
+- Same batch insert logic with conflict resolution
+- Suitable for smaller datasets or development
+
+## Error Handling
+
+The class handles:
+- **Duplicate inserts**: ON CONFLICT DO NOTHING for price_history
+- **Lock contention**: 30-second busy timeout for SQLite
+- **Connection failures**: Graceful cleanup via context manager
+- **Invalid data**: Parsing utilities return None for unparseable values
+
+## Performance Characteristics
+
+- **Batch inserts**: 100-record batches for TimescaleDB, 50 for SQLite
+- **Concurrent writes**: WAL mode allows multiple readers + one writer
+- **Memory usage**: 64MB SQLite cache, 256MB mmap
+- **Connection pooling**: 10-100 connections for TimescaleDB
+
+## Related Topics
+
+<CardGroup cols={2}>
+  <Card title="Data Models" icon="shapes" href="/api-reference/python/data-models">
+    Pydantic models for API responses
+  </Card>
+  <Card title="Database Schema" icon="database" href="/api-reference/database/overview">
+    Complete table schemas and indexes
+  </Card>
+  <Card title="Steam API Client" icon="plug" href="/api-reference/python/steam-client">
+    Fetching data from Steam API
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    TimescaleDB setup instructions
+  </Card>
+</CardGroup>

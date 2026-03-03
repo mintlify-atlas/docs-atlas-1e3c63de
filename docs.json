@@ -80,6 +80,7 @@
               "api-reference/python/rate-limiter",
               "api-reference/python/steam-client",
               "api-reference/python/schedulers",
+              "api-reference/python/sqlinserts",
               "api-reference/python/data-models"
             ]
           }
