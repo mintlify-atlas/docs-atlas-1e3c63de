@@ -1,0 +1,101 @@
+{
+  "projectType": "data-platform",
+  "projectName": "Hridaya Steam Market Tracker",
+  "projectDescription": "A high-performance Steam market data ingestion engine designed to overcome strict rate limits, providing structured time-series data for quantitative analysis.",
+  "theme": "sequoia",
+  "primaryColor": "#1b2838",
+  "lightColor": "#66c0f4",
+  "darkColor": "#171a21",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Get Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation"
+            ]
+          },
+          {
+            "group": "Configuration",
+            "pages": [
+              "configuration/overview",
+              "configuration/config-reference",
+              "configuration/api-endpoints",
+              "configuration/authentication"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/orchestrator",
+              "architecture/rate-limiter",
+              "architecture/schedulers"
+            ]
+          },
+          {
+            "group": "Guides",
+            "pages": [
+              "guides/tracking-items",
+              "guides/querying-data",
+              "guides/troubleshooting"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Database Schema",
+            "pages": [
+              "api-reference/database/overview",
+              "api-reference/database/price-overview",
+              "api-reference/database/orders-histogram",
+              "api-reference/database/orders-activity",
+              "api-reference/database/price-history",
+              "api-reference/database/queries"
+            ]
+          },
+          {
+            "group": "Python API",
+            "pages": [
+              "api-reference/python/orchestrator",
+              "api-reference/python/rate-limiter",
+              "api-reference/python/steam-client",
+              "api-reference/python/schedulers",
+              "api-reference/python/data-models"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Sliding-window rate limiter enforcing Steam's 15 req/min limit",
+    "Urgency-based real-time scheduler for live market data",
+    "Fixed-interval batch scheduler for historical price snapshots",
+    "Async Python architecture with shared rate limiting across schedulers",
+    "SQLite storage with four specialized tables for different data types",
+    "Automatic retry with exponential backoff for transient errors",
+    "Hot-swappable authentication cookies via .env file",
+    "Pydantic data validation for type safety across the pipeline"
+  ],
+  "publicApiSurface": [
+    "cerebro.py - Main orchestrator entry point",
+    "RateLimiter - Sliding window rate limiting class",
+    "SteamAPIClient - Async Steam API client with four endpoints",
+    "snoozerScheduler - Urgency-based real-time scheduler",
+    "ClockworkScheduler - Fixed-interval historical data scheduler",
+    "priceoverview endpoint - Current market prices and volume",
+    "itemordershistogram endpoint - Full order book snapshots",
+    "itemordersactivity endpoint - Recent trade activity feed",
+    "pricehistory endpoint - Historical hourly price data",
+    "config.yaml - Configuration file for tracked items and rate limits",
+    "SQLite database - Four tables: price_overview, orders_histogram, orders_activity, price_history"
+  ]
+}
